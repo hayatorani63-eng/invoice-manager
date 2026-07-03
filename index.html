@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>請求書管理ツール</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f6f9; --card:#ffffff; --border:#e2e8f0; --text:#1e293b; --sub:#64748b;
+    --accent:#2563eb; --accent-light:#eff6ff; --danger:#dc2626; --danger-bg:#fef2f2;
+    --warn:#d97706; --warn-bg:#fffbeb; --ok:#059669; --ok-bg:#ecfdf5;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif; background:var(--bg); color:var(--text); padding:24px;}
+  .container{max-width:1200px; margin:0 auto;}
+  header{display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;}
+  h1{font-size:22px; font-weight:700;}
+  h1 span{font-size:12px; color:var(--sub); font-weight:400; margin-left:10px;}
+
+  /* 統計カード */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:20px;}
+  .stat{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 18px;}
+  .stat .label{font-size:12px; color:var(--sub); margin-bottom:4px;}
+  .stat .value{font-size:22px; font-weight:700;}
+  .stat.dup .value{color:var(--danger);}
+
+  /* ドロップゾーン */
+  .dropzone{background:var(--card); border:2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; cursor:pointer; transition:all .15s; margin-bottom:16px;}
+  .dropzone:hover,.dropzone.over{border-color:var(--accent); background:var(--accent-light);}
+  .dropzone .icon{font-size:34px; margin-bottom:8px;}
+  .dropzone p{color:var(--sub); font-size:14px;}
+  .dropzone p b{color:var(--text);}
+  .dropzone small{color:#94a3b8; display:block; margin-top:6px;}
+  #fileInput{display:none;}
+
+  /* 処理中 */
+  .progress{display:none; background:var(--accent-light); border:1px solid #bfdbfe; border-radius:8px; padding:10px 16px; margin-bottom:16px; font-size:14px; color:var(--accent);}
+  .progress.show{display:block;}
+
+  /* 警告バナー */
+  #alertArea{position:sticky; top:8px; z-index:50;}
+  .alert{border-radius:10px; padding:14px 18px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; box-shadow:0 4px 12px rgba(0,0,0,.08); animation:slideIn .25s;}
+  @keyframes slideIn{from{opacity:0; transform:translateY(-8px);} to{opacity:1; transform:none;}}
+  .alert.exact{background:var(--danger-bg); border:1.5px solid var(--danger); color:#991b1b;}
+  .alert.content{background:var(--warn-bg); border:1.5px solid var(--warn); color:#92400e;}
+  .alert b{display:block; margin-bottom:2px;}
+  .alert .close{background:none; border:none; font-size:18px; cursor:pointer; color:inherit; line-height:1;}
+
+  /* ツールバー */
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center;}
+  .toolbar input[type=text],.toolbar select{padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card);}
+  .toolbar input[type=text]{flex:1; min-width:180px;}
+  .btn{padding:8px 14px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-size:13px; cursor:pointer; transition:background .1s; white-space:nowrap;}
+  .btn:hover{background:#f1f5f9;}
+  .btn.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .btn.primary:hover{background:#1d4ed8;}
+  .btn.danger{color:var(--danger); border-color:#fecaca;}
+  .btn.danger:hover{background:var(--danger-bg);}
+
+  /* テーブル */
+  .table-wrap{background:var(--card); border:1px solid var(--border); border-radius:12px; overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:13px; min-width:900px;}
+  th{background:#f8fafc; text-align:left; padding:10px 12px; color:var(--sub); font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; cursor:pointer; user-select:none;}
+  th:hover{color:var(--text);}
+  td{padding:10px 12px; border-bottom:1px solid #f1f5f9; vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  tr.dup-exact{background:var(--danger-bg);}
+  tr.dup-content{background:var(--warn-bg);}
+  .amount{font-weight:700; text-align:right; white-space:nowrap;}
+  .badge{display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; white-space:nowrap;}
+  .badge.exact{background:var(--danger); color:#fff;}
+  .badge.content{background:var(--warn); color:#fff;}
+  .badge.paid{background:var(--ok-bg); color:var(--ok);}
+  .badge.unpaid{background:var(--danger-bg); color:var(--danger);}
+  .badge.checking{background:var(--warn-bg); color:var(--warn);}
+  .row-actions{display:flex; gap:6px;}
+  .row-actions button{border:none; background:none; cursor:pointer; font-size:13px; color:var(--accent); padding:2px 4px;}
+  .row-actions button.del{color:var(--danger);}
+  .empty{text-align:center; padding:48px 20px; color:var(--sub); font-size:14px;}
+  .filename{color:var(--sub); font-size:11px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .vendor-cell{max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .memo-cell{max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--sub);}
+
+  /* モーダル */
+  .modal-bg{display:none; position:fixed; inset:0; background:rgba(15,23,42,.5); z-index:100; align-items:center; justify-content:center; padding:16px;}
+  .modal-bg.show{display:flex;}
+  .modal{background:#fff; border-radius:14px; padding:24px; width:100%; max-width:480px; max-height:90vh; overflow-y:auto;}
+  .modal h2{font-size:17px; margin-bottom:16px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-size:12px; color:var(--sub); margin-bottom:4px; font-weight:600;}
+  .field input,.field select,.field textarea{width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:8px; font-size:14px; font-family:inherit;}
+  .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:18px;}
+  .note{font-size:11px; color:#94a3b8; margin-top:14px; line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>📋 請求書管理ツール<span>支払済み請求書の一元管理・重複検知</span></h1>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" onclick="exportCSV()">⬇ CSV出力</button>
+      <button class="btn" onclick="exportJSON()">💾 バックアップ</button>
+      <button class="btn" onclick="document.getElementById('jsonInput').click()">📂 復元</button>
+      <input type="file" id="jsonInput" accept=".json" style="display:none" onchange="importJSON(this)">
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="label">登録件数</div><div class="value" id="stCount">0件</div></div>
+    <div class="stat"><div class="label">合計金額</div><div class="value" id="stTotal">¥0</div></div>
+    <div class="stat"><div class="label">今月の合計</div><div class="value" id="stMonth">¥0</div></div>
+    <div class="stat dup"><div class="label">⚠ 重複の疑い</div><div class="value" id="stDup">0件</div></div>
+  </div>
+
+  <div id="alertArea"></div>
+
+  <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">📄</div>
+    <p><b>請求書をここにドラッグ&ドロップ</b>(またはクリックして選択)</p>
+    <small>PDF・画像(JPG/PNG)対応/複数ファイル同時OK/内容を自動読み取りします</small>
+    <input type="file" id="fileInput" multiple accept=".pdf,image/*">
+  </div>
+
+  <div class="progress" id="progress"></div>
+
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="🔍 発行元・内容・請求書番号で検索…" oninput="render()">
+    <select id="monthFilter" onchange="render()"><option value="">すべての月</option></select>
+    <select id="statusFilter" onchange="render()">
+      <option value="">すべてのステータス</option>
+      <option value="支払済">支払済</option>
+      <option value="未払い">未払い</option>
+      <option value="確認中">確認中</option>
+    </select>
+    <select id="sortSel" onchange="render()">
+      <option value="date_desc">日付(新しい順)</option>
+      <option value="date_asc">日付(古い順)</option>
+      <option value="amount_desc">金額(大きい順)</option>
+      <option value="added_desc">登録順(新しい順)</option>
+    </select>
+    <button class="btn danger" onclick="clearAll()">全削除</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>日付</th><th>発行元</th><th>内容</th><th style="text-align:right">金額(税込)</th>
+        <th>請求書番号</th><th>ステータス</th><th>重複</th><th>ファイル</th><th></th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="empty">まだ請求書が登録されていません。上のエリアにファイルをドロップしてください。</div>
+  </div>
+
+  <p class="note">
+    ※ データはこのブラウザ内(localStorage)に保存されます。別のPC・ブラウザには引き継がれないため、定期的に「💾 バックアップ」でJSON保存することをおすすめします。<br>
+    ※ 読み取りはOCR+パターン認識のため、手書きや低画質では誤認識することがあります。「編集」から修正できます。<br>
+    ※ 重複判定:<span class="badge exact">完全重複</span> 同一ファイルを再登録 /
+    <span class="badge content">重複疑い</span> 発行元+金額+日付(または請求書番号)が一致
+  </p>
+</div>
+
+<!-- 編集モーダル -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2 id="modalTitle">請求書の編集</h2>
+    <div class="field"><label>発行元(支払先)</label><input id="fVendor"></div>
+    <div class="field"><label>日付</label><input id="fDate" type="date"></div>
+    <div class="field"><label>金額(税込・円)</label><input id="fAmount" type="number" min="0"></div>
+    <div class="field"><label>請求書番号</label><input id="fInvNo"></div>
+    <div class="field"><label>インボイス登録番号</label><input id="fRegNo" placeholder="T1234567890123"></div>
+    <div class="field"><label>内容・メモ</label><input id="fMemo"></div>
+    <div class="field"><label>ステータス</label>
+      <select id="fStatus"><option>支払済</option><option>未払い</option><option>確認中</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">キャンセル</button>
+      <button class="btn primary" onclick="saveModal()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const STORE_KEY = "invoiceManagerData_v1";
+let records = load();
+let editingId = null;
+let tesseractLoading = null;
+
+/* ---------- 保存/読込 ---------- */
+function load(){
+  try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }catch(e){ return []; }
+}
+function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(records)); }
+
+/* ---------- ファイル受け取り ---------- */
+const dz = document.getElementById("dropzone");
+dz.addEventListener("dragover", e=>{ e.preventDefault(); dz.classList.add("over"); });
+dz.addEventListener("dragleave", ()=> dz.classList.remove("over"));
+dz.addEventListener("drop", e=>{ e.preventDefault(); dz.classList.remove("over"); handleFiles(e.dataTransfer.files); });
+document.getElementById("fileInput").addEventListener("change", e=>{ handleFiles(e.target.files); e.target.value=""; });
+
+async function handleFiles(fileList){
+  const files = Array.from(fileList).filter(f=> f.type==="application/pdf" || f.type.startsWith("image/") || /\.pdf$/i.test(f.name));
+  if(!files.length){ showAlert("content","対応していないファイル形式です","PDFまたは画像(JPG/PNG)を読み込んでください。"); return; }
+  for(let i=0;i<files.length;i++){
+    setProgress(`読み取り中… (${i+1}/${files.length}) ${files[i].name}`);
+    try{ await processFile(files[i]); }
+    catch(err){ console.error(err); showAlert("content", `「${files[i].name}」の読み取りに失敗しました`, "手動で登録するか、別の形式で再度お試しください。"); }
+  }
+  setProgress(null);
+  render();
+}
+
+async function processFile(file){
+  const buf = await file.arrayBuffer();
+  const hash = await sha256(buf);
+
+  let text = "";
+  if(file.type==="application/pdf" || /\.pdf$/i.test(file.name)){
+    text = await extractPdfText(buf);
+  }else{
+    text = await ocrImage(file);
+  }
+  const parsed = parseInvoiceText(text || "");
+
+  const rec = {
+    id: Date.now() + "_" + Math.random().toString(36).slice(2,7),
+    fileName: file.name,
+    fileHash: hash,
+    vendor: parsed.vendor || "",
+    date: parsed.date || "",
+    amount: parsed.amount || 0,
+    invoiceNo: parsed.invoiceNo || "",
+    regNo: parsed.regNo || "",
+    memo: parsed.memo || "",
+    status: "支払済",
+    addedAt: new Date().toISOString(),
+    dup: null, dupWith: null
+  };
+
+  const d = findDuplicate(rec);
+  if(d){
+    rec.dup = d.type; rec.dupWith = d.rec.id;
+    if(d.type==="exact"){
+      showAlert("exact", `🚨 重複を検知:「${file.name}」`,
+        `以前登録された「${d.rec.fileName}」とまったく同じファイルです。二重登録の可能性があります。(${fmtY(d.rec.amount)} / ${d.rec.vendor||"発行元不明"})`);
+    }else{
+      showAlert("content", `⚠ 重複の疑い:「${file.name}」`,
+        `既存の請求書と内容が一致します:${d.rec.vendor||"発行元不明"} / ${fmtY(d.rec.amount)} / ${d.rec.date||"日付不明"}。二重払いにご注意ください。`);
+    }
+  }
+  records.unshift(rec);
+  save();
+}
+
+/* ---------- 重複判定 ---------- */
+function findDuplicate(rec){
+  for(const r of records){
+    if(r.fileHash === rec.fileHash) return {type:"exact", rec:r};
+  }
+  for(const r of records){
+    if(!rec.amount || rec.amount !== r.amount) continue;
+    const sameInv = rec.invoiceNo && r.invoiceNo && rec.invoiceNo === r.invoiceNo;
+    const sameVendorDate = rec.vendor && r.vendor && normalize(rec.vendor)===normalize(r.vendor) && rec.date && rec.date===r.date;
+    if(sameInv || sameVendorDate) return {type:"content", rec:r};
+  }
+  return null;
+}
+function normalize(s){ return (s||"").replace(/[\s　]/g,"").replace(/株式会社|㈱|\(株\)|合同会社|有限会社/g,""); }
+
+async function sha256(buf){
+  const h = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+/* ---------- PDF/OCR ---------- */
+async function extractPdfText(buf){
+  const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+  let text = "";
+  const pages = Math.min(pdf.numPages, 3);
+  for(let p=1;p<=pages;p++){
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    text += tc.items.map(it=>it.str).join("\n") + "\n";
+  }
+  if(text.replace(/\s/g,"").length < 30){
+    // テキスト層なし(スキャンPDF)→ 1ページ目を画像化してOCR
+    setProgress("スキャンPDFを検出。OCRで読み取り中…(初回は少し時間がかかります)");
+    const page = await pdf.getPage(1);
+    const vp = page.getViewport({scale:2});
+    const canvas = document.createElement("canvas");
+    canvas.width = vp.width; canvas.height = vp.height;
+    await page.render({canvasContext:canvas.getContext("2d"), viewport:vp}).promise;
+    text = await ocrImage(canvas);
+  }
+  return text;
+}
+
+async function loadTesseract(){
+  if(window.Tesseract) return;
+  if(!tesseractLoading){
+    tesseractLoading = new Promise((res,rej)=>{
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js";
+      s.onload = res; s.onerror = ()=>rej(new Error("OCRライブラリの読み込みに失敗(要インターネット接続)"));
+      document.head.appendChild(s);
+    });
+  }
+  await tesseractLoading;
+}
+async function ocrImage(src){
+  await loadTesseract();
+  setProgress("OCRで文字を読み取り中…(初回は日本語データの取得に時間がかかります)");
+  const result = await Tesseract.recognize(src, "jpn+eng");
+  return result.data.text || "";
+}
+
+/* ---------- テキスト解析 ---------- */
+function parseInvoiceText(text){
+  const t = text.replace(/[！-～]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)); // 全角→半角
+  const lines = t.split(/\n/).map(l=>l.trim()).filter(Boolean);
+  const out = {};
+
+  // 金額:「合計」「ご請求金額」等の近くを優先、なければ最大値
+  const kwAmt = t.match(/(?:合\s*計|ご?請求金額|請求金額|総額|お支払い?金額|税込合計)[^0-9¥￥]{0,15}[¥￥]?\s*([0-9][0-9,]*)/);
+  if(kwAmt){ out.amount = parseInt(kwAmt[1].replace(/,/g,""),10); }
+  else{
+    const all = [...t.matchAll(/[¥￥]\s*([0-9][0-9,]{2,})/g), ...t.matchAll(/([0-9][0-9,]{3,})\s*円/g)]
+      .map(m=>parseInt(m[1].replace(/,/g,""),10)).filter(n=>n>0 && n<100000000);
+    if(all.length) out.amount = Math.max(...all);
+  }
+
+  // 日付(西暦・令和対応)
+  let dm = t.match(/(20\d{2})\s*[年\/\-\.]\s*(\d{1,2})\s*[月\/\-\.]\s*(\d{1,2})/);
+  if(dm){ out.date = `${dm[1]}-${String(dm[2]).padStart(2,"0")}-${String(dm[3]).padStart(2,"0")}`; }
+  else{
+    dm = t.match(/令和\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+    if(dm){ out.date = `${2018+parseInt(dm[1],10)}-${String(dm[2]).padStart(2,"0")}-${String(dm[3]).padStart(2,"0")}`; }
+  }
+
+  // 請求書番号
+  const inv = t.match(/(?:請求書番号|請求書No\.?|請求No\.?|伝票番号|Invoice\s*(?:No\.?|#))[::\s\.]*([A-Za-z0-9][A-Za-z0-9\-_\/]{1,29})/i);
+  if(inv) out.invoiceNo = inv[1];
+
+  // インボイス登録番号
+  const reg = t.match(/T\d{13}/);
+  if(reg) out.regNo = reg[0];
+
+  // 発行元:会社名を含む行のうち、宛先(御中・様)でないもの
+  const corpRe = /(株式会社|合同会社|有限会社|㈱|\(株\)|Inc\.|Co\.,?\s*Ltd)/;
+  for(const line of lines){
+    if(corpRe.test(line) && !/御中|様\s*$/.test(line)){
+      out.vendor = line.replace(/^(発行者?|発行元|請求元)[::\s]*/,"").slice(0,50);
+      break;
+    }
+  }
+
+  // 内容:件名・品目らしき行
+  const memo = t.match(/(?:件\s*名|品\s*名|摘\s*要|内容)[::\s]*(.+)/);
+  if(memo) out.memo = memo[1].trim().slice(0,60);
+
+  return out;
+}
+
+/* ---------- 表示 ---------- */
+function fmtY(n){ return "¥" + (n||0).toLocaleString("ja-JP"); }
+
+function render(){
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const mf = document.getElementById("monthFilter").value;
+  const sf = document.getElementById("statusFilter").value;
+  const sort = document.getElementById("sortSel").value;
+
+  let list = records.filter(r=>{
+    if(q && !((r.vendor||"")+(r.memo||"")+(r.invoiceNo||"")+(r.fileName||"")).toLowerCase().includes(q)) return false;
+    if(mf && (r.date||"").slice(0,7)!==mf) return false;
+    if(sf && r.status!==sf) return false;
+    return true;
+  });
+  list.sort((a,b)=>{
+    if(sort==="date_desc") return (b.date||"").localeCompare(a.date||"");
+    if(sort==="date_asc") return (a.date||"").localeCompare(b.date||"");
+    if(sort==="amount_desc") return (b.amount||0)-(a.amount||0);
+    return (b.addedAt||"").localeCompare(a.addedAt||"");
+  });
+
+  // 月フィルタの選択肢
+  const months = [...new Set(records.map(r=>(r.date||"").slice(0,7)).filter(Boolean))].sort().reverse();
+  const mSel = document.getElementById("monthFilter");
+  const cur = mSel.value;
+  mSel.innerHTML = '<option value="">すべての月</option>' + months.map(m=>`<option value="${m}">${m.replace("-","年")}月</option>`).join("");
+  mSel.value = cur;
+
+  // テーブル
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = list.map(r=>{
+    const dupBadge = r.dup==="exact" ? '<span class="badge exact">完全重複</span>'
+                   : r.dup==="content" ? '<span class="badge content">重複疑い</span>' : "";
+    const stBadge = r.status==="支払済" ? '<span class="badge paid">支払済</span>'
+                  : r.status==="未払い" ? '<span class="badge unpaid">未払い</span>'
+                  : '<span class="badge checking">確認中</span>';
+    return `<tr class="${r.dup==="exact"?"dup-exact":r.dup==="content"?"dup-content":""}">
+      <td>${r.date||'<span style="color:#cbd5e1">未設定</span>'}</td>
+      <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#cbd5e1">未設定</span>'}</td>
+      <td class="memo-cell" title="${esc(r.memo)}">${esc(r.memo)}</td>
+      <td class="amount">${fmtY(r.amount)}</td>
+      <td>${esc(r.invoiceNo)}</td>
+      <td>${stBadge}</td>
+      <td>${dupBadge}</td>
+      <td class="filename" title="${esc(r.fileName)}">${esc(r.fileName)}</td>
+      <td class="row-actions">
+        <button onclick="openModal('${r.id}')">編集</button>
+        <button class="del" onclick="delRec('${r.id}')">削除</button>
+      </td>
+    </tr>`;
+  }).join("");
+  document.getElementById("empty").style.display = list.length ? "none" : "block";
+
+  // 統計
+  const nowM = new Date().toISOString().slice(0,7);
+  document.getElementById("stCount").textContent = records.length + "件";
+  document.getElementById("stTotal").textContent = fmtY(records.reduce((s,r)=>s+(r.amount||0),0));
+  document.getElementById("stMonth").textContent = fmtY(records.filter(r=>(r.date||"").slice(0,7)===nowM).reduce((s,r)=>s+(r.amount||0),0));
+  document.getElementById("stDup").textContent = records.filter(r=>r.dup).length + "件";
+}
+function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+/* ---------- 警告・進捗 ---------- */
+function showAlert(type, title, body){
+  const el = document.createElement("div");
+  el.className = "alert " + type;
+  el.innerHTML = `<div><b>${esc(title)}</b><span style="font-size:13px">${esc(body)}</span></div><button class="close" onclick="this.parentElement.remove()">✕</button>`;
+  document.getElementById("alertArea").prepend(el);
+}
+function setProgress(msg){
+  const p = document.getElementById("progress");
+  if(msg){ p.textContent = "⏳ " + msg; p.classList.add("show"); }
+  else p.classList.remove("show");
+}
+
+/* ---------- 編集/削除 ---------- */
+function openModal(id){
+  editingId = id;
+  const r = records.find(x=>x.id===id); if(!r) return;
+  document.getElementById("fVendor").value = r.vendor||"";
+  document.getElementById("fDate").value = r.date||"";
+  document.getElementById("fAmount").value = r.amount||"";
+  document.getElementById("fInvNo").value = r.invoiceNo||"";
+  document.getElementById("fRegNo").value = r.regNo||"";
+  document.getElementById("fMemo").value = r.memo||"";
+  document.getElementById("fStatus").value = r.status||"支払済";
+  document.getElementById("modalBg").classList.add("show");
+}
+function closeModal(){ document.getElementById("modalBg").classList.remove("show"); editingId=null; }
+function saveModal(){
+  const r = records.find(x=>x.id===editingId); if(!r) return;
+  r.vendor = document.getElementById("fVendor").value.trim();
+  r.date = document.getElementById("fDate").value;
+  r.amount = parseInt(document.getElementById("fAmount").value,10)||0;
+  r.invoiceNo = document.getElementById("fInvNo").value.trim();
+  r.regNo = document.getElementById("fRegNo").value.trim();
+  r.memo = document.getElementById("fMemo").value.trim();
+  r.status = document.getElementById("fStatus").value;
+  // 編集後に重複を再判定
+  r.dup = null; r.dupWith = null;
+  const others = records.filter(x=>x.id!==r.id);
+  const bak = records; records = others;
+  const d = findDuplicate(r);
+  records = bak;
+  if(d){ r.dup = d.type; r.dupWith = d.rec.id;
+    showAlert(d.type==="exact"?"exact":"content","⚠ 編集後も重複しています",`${d.rec.vendor||"発行元不明"} / ${fmtY(d.rec.amount)} と一致します。`);
+  }
+  save(); closeModal(); render();
+}
+function delRec(id){
+  if(!confirm("この請求書を削除しますか?")) return;
+  records = records.filter(r=>r.id!==id);
+  // 消した相手を参照していた重複マークを再判定
+  records.forEach(r=>{
+    if(r.dupWith===id){
+      r.dup=null; r.dupWith=null;
+      const others = records.filter(x=>x.id!==r.id);
+      const bak = records; records = others;
+      const d = findDuplicate(r);
+      records = bak;
+      if(d){ r.dup=d.type; r.dupWith=d.rec.id; }
+    }
+  });
+  save(); render();
+}
+function clearAll(){
+  if(!confirm("すべてのデータを削除します。よろしいですか?")) return;
+  if(!confirm("本当に削除しますか?(バックアップ推奨)")) return;
+  records = []; save(); render();
+}
+
+/* ---------- 入出力 ---------- */
+function exportCSV(){
+  const head = ["日付","発行元","内容","金額","請求書番号","登録番号","ステータス","ファイル名","重複"];
+  const rows = records.map(r=>[r.date,r.vendor,r.memo,r.amount,r.invoiceNo,r.regNo,r.status,r.fileName,
+    r.dup==="exact"?"完全重複":r.dup==="content"?"重複疑い":""]);
+  const csv = "﻿" + [head,...rows].map(row=>row.map(c=>`"${String(c??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
+  download(new Blob([csv],{type:"text/csv"}), `請求書一覧_${new Date().toISOString().slice(0,10)}.csv`);
+}
+function exportJSON(){
+  download(new Blob([JSON.stringify(records,null,2)],{type:"application/json"}), `請求書バックアップ_${new Date().toISOString().slice(0,10)}.json`);
+}
+function importJSON(input){
+  const f = input.files[0]; if(!f) return;
+  const fr = new FileReader();
+  fr.onload = ()=>{
+    try{
+      const data = JSON.parse(fr.result);
+      if(!Array.isArray(data)) throw 0;
+      records = data; save(); render();
+      showAlert("content","バックアップを復元しました",`${data.length}件のデータを読み込みました。`);
+    }catch(e){ alert("ファイルの形式が正しくありません。"); }
+  };
+  fr.readAsText(f);
+  input.value = "";
+}
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+}
+
+document.getElementById("modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeModal(); });
+render();
+</script>
+</body>
+</html>
