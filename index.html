@@ -8,15 +8,20 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <style>
   :root{
-    --bg:#f2f4fb; --card:#ffffff; --border:#e7e9f4; --text:#1a1e35; --sub:#6b7194;
-    --accent:#6366f1; --accent2:#8b5cf6; --accent-light:#eef0ff;
+    color-scheme:dark;
+    --bg:#0b0d17; --card:#151827; --border:#262b42; --text:#e8eaf6; --sub:#8b91b5;
+    --accent:#818cf8; --accent2:#a78bfa; --accent-light:#232849;
     --grad:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
-    --danger:#e11d48; --danger-bg:#fff1f3;
-    --warn:#d97706; --warn-bg:#fff9ec; --ok:#059669; --ok-bg:#ebfaf3;
-    --shadow:0 8px 24px rgba(53,58,110,.08);
-    --shadow-lg:0 16px 40px rgba(53,58,110,.14);
+    --danger:#fb7185; --danger-bg:#2b1420;
+    --warn:#fbbf24; --warn-bg:#2a2113; --ok:#34d399; --ok-bg:#12291f;
+    --input-bg:#10131f;
+    --shadow:0 8px 24px rgba(0,0,0,.35);
+    --shadow-lg:0 16px 40px rgba(0,0,0,.5);
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{
@@ -27,9 +32,9 @@
   body::before{
     content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
     background:
-      radial-gradient(640px 320px at 88% -60px, rgba(139,92,246,.16), transparent 62%),
-      radial-gradient(560px 300px at -4% -20px, rgba(99,102,241,.14), transparent 60%),
-      radial-gradient(500px 400px at 50% 110%, rgba(56,189,248,.08), transparent 60%);
+      radial-gradient(640px 320px at 88% -60px, rgba(139,92,246,.22), transparent 62%),
+      radial-gradient(560px 300px at -4% -20px, rgba(99,102,241,.18), transparent 60%),
+      radial-gradient(500px 400px at 50% 110%, rgba(56,189,248,.10), transparent 60%);
   }
   .container{max-width:1200px; margin:0 auto;}
   .num{font-family:"Outfit","Noto Sans JP",sans-serif; font-feature-settings:"tnum";}
@@ -43,7 +48,7 @@
     box-shadow:0 8px 20px rgba(99,102,241,.35);
   }
   h1{font-size:22px; font-weight:900; letter-spacing:.01em;
-    background:linear-gradient(120deg,#1a1e35 30%,#4f46e5 100%);
+    background:linear-gradient(120deg,#f1f2fb 30%,#a5b4fc 100%);
     -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;}
   .brand small{display:block; font-size:12px; color:var(--sub); font-weight:500; margin-top:2px;}
 
@@ -51,13 +56,13 @@
   .btn{
     padding:9px 16px; border:1px solid var(--border); border-radius:12px; background:var(--card);
     font-size:13px; font-weight:600; font-family:inherit; color:var(--text); cursor:pointer;
-    transition:all .15s; white-space:nowrap; box-shadow:0 2px 6px rgba(53,58,110,.06);
+    transition:all .15s; white-space:nowrap; box-shadow:0 2px 6px rgba(0,0,0,.25);
   }
-  .btn:hover{transform:translateY(-1px); box-shadow:0 6px 14px rgba(53,58,110,.12); border-color:#d5d9f0;}
+  .btn:hover{transform:translateY(-1px); box-shadow:0 6px 14px rgba(0,0,0,.4); border-color:#3a4166;}
   .btn:active{transform:none;}
   .btn.primary{background:var(--grad); color:#fff; border:none; box-shadow:0 6px 16px rgba(99,102,241,.35);}
   .btn.primary:hover{box-shadow:0 10px 22px rgba(99,102,241,.45);}
-  .btn.danger{color:var(--danger); border-color:#fbd5dd;}
+  .btn.danger{color:var(--danger); border-color:#4a2333;}
   .btn.danger:hover{background:var(--danger-bg);}
   .btn.ghost{background:transparent; box-shadow:none; border-color:transparent; color:var(--accent);}
   .btn.ghost:hover{background:var(--accent-light); transform:none;}
@@ -71,9 +76,9 @@
   }
   .stat:hover{transform:translateY(-2px); box-shadow:var(--shadow-lg);}
   .stat-ic{width:44px; height:44px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;}
-  .stat:nth-child(1) .stat-ic{background:#eef0ff;}
-  .stat:nth-child(2) .stat-ic{background:#f3ecff;}
-  .stat:nth-child(3) .stat-ic{background:#e8f6ff;}
+  .stat:nth-child(1) .stat-ic{background:#232849;}
+  .stat:nth-child(2) .stat-ic{background:#2a2347;}
+  .stat:nth-child(3) .stat-ic{background:#16283e;}
   .stat:nth-child(4) .stat-ic{background:var(--danger-bg);}
   .stat .label{font-size:11.5px; color:var(--sub); font-weight:600; letter-spacing:.02em; margin-bottom:3px;}
   .stat .value{font-size:23px; font-weight:800; line-height:1.1;}
@@ -81,13 +86,13 @@
 
   /* ドロップゾーン */
   .dropzone{
-    position:relative; background:var(--card); border:2px dashed #c8cdf0; border-radius:18px;
+    position:relative; background:var(--card); border:2px dashed #333a5c; border-radius:18px;
     padding:38px 20px; text-align:center; cursor:pointer; transition:all .18s;
     margin-bottom:18px; box-shadow:var(--shadow); overflow:hidden;
   }
   .dropzone:hover,.dropzone.over{
     border-color:var(--accent);
-    background:linear-gradient(160deg,#f6f7ff 0%,#f2edff 100%);
+    background:linear-gradient(160deg,#1a1e33 0%,#201a38 100%);
     box-shadow:var(--shadow-lg);
   }
   .dz-icon{
@@ -97,11 +102,11 @@
   }
   .dropzone p{color:var(--sub); font-size:14px;}
   .dropzone p b{color:var(--text); font-weight:700;}
-  .dropzone small{color:#9aa0c3; display:block; margin-top:6px;}
+  .dropzone small{color:#666d94; display:block; margin-top:6px;}
   #fileInput{display:none;}
 
   /* 処理中 */
-  .progress{display:none; background:var(--accent-light); border:1px solid #d6d9ff; border-radius:12px; padding:11px 18px; margin-bottom:16px; font-size:13.5px; font-weight:600; color:var(--accent);}
+  .progress{display:none; background:var(--accent-light); border:1px solid #303663; border-radius:12px; padding:11px 18px; margin-bottom:16px; font-size:13.5px; font-weight:600; color:var(--accent);}
   .progress.show{display:block;}
 
   /* 警告バナー */
@@ -112,8 +117,8 @@
     box-shadow:var(--shadow-lg); animation:slideIn .28s; backdrop-filter:blur(6px);
   }
   @keyframes slideIn{from{opacity:0; transform:translateY(-10px);} to{opacity:1; transform:none;}}
-  .alert.exact{background:rgba(255,241,243,.96); border:1.5px solid var(--danger); color:#9f1239;}
-  .alert.content{background:rgba(255,249,236,.96); border:1.5px solid var(--warn); color:#92400e;}
+  .alert.exact{background:rgba(43,20,32,.96); border:1.5px solid var(--danger); color:#fda4af;}
+  .alert.content{background:rgba(42,33,19,.96); border:1.5px solid var(--warn); color:#fcd34d;}
   .alert b{display:block; margin-bottom:2px;}
   .alert .close{background:none; border:none; font-size:18px; cursor:pointer; color:inherit; line-height:1;}
 
@@ -121,8 +126,8 @@
   .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
   .toolbar input[type=text],.toolbar select{
     padding:9px 13px; border:1px solid var(--border); border-radius:12px; font-size:13px;
-    font-family:inherit; background:var(--card); color:var(--text);
-    box-shadow:0 2px 6px rgba(53,58,110,.05); transition:border-color .15s, box-shadow .15s;
+    font-family:inherit; background:var(--input-bg); color:var(--text);
+    box-shadow:0 2px 6px rgba(0,0,0,.2); transition:border-color .15s, box-shadow .15s;
   }
   .toolbar input[type=text]:focus,.toolbar select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.15);}
   .toolbar input[type=text]{flex:1; min-width:180px;}
@@ -131,18 +136,18 @@
   .table-wrap{background:var(--card); border:1px solid var(--border); border-radius:16px; overflow-x:auto; box-shadow:var(--shadow);}
   table{width:100%; border-collapse:collapse; font-size:13px; min-width:900px;}
   th{
-    background:#f8f9fe; text-align:left; padding:11px 14px; color:var(--sub);
+    background:#1a1e30; text-align:left; padding:11px 14px; color:var(--sub);
     font-weight:700; font-size:11.5px; letter-spacing:.04em;
     border-bottom:1px solid var(--border); white-space:nowrap; user-select:none;
   }
-  td{padding:11px 14px; border-bottom:1px solid #f2f3fa; vertical-align:middle;}
+  td{padding:11px 14px; border-bottom:1px solid #20243a; vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
   tbody tr{transition:background .1s;}
-  tbody tr:hover{background:#f8f9ff;}
+  tbody tr:hover{background:#1c2036;}
   tr.dup-exact{background:var(--danger-bg);}
-  tr.dup-exact:hover{background:#ffe9ee;}
+  tr.dup-exact:hover{background:#351926;}
   tr.dup-content{background:var(--warn-bg);}
-  tr.dup-content:hover{background:#fff3d9;}
+  tr.dup-content:hover{background:#332a18;}
   .amount{font-weight:800; text-align:right; white-space:nowrap; font-family:"Outfit","Noto Sans JP",sans-serif;}
   .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap;}
   .badge.exact{background:linear-gradient(135deg,#e11d48,#f43f5e); color:#fff; box-shadow:0 3px 8px rgba(225,29,72,.3);}
@@ -164,20 +169,21 @@
   .memo-cell{max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--sub);}
 
   /* モーダル */
-  .modal-bg{display:none; position:fixed; inset:0; background:rgba(20,24,50,.55); z-index:100; align-items:center; justify-content:center; padding:16px; backdrop-filter:blur(3px);}
+  .modal-bg{display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:100; align-items:center; justify-content:center; padding:16px; backdrop-filter:blur(3px);}
   .modal-bg.show{display:flex;}
-  .modal{background:#fff; border-radius:20px; padding:26px; width:100%; max-width:480px; max-height:90vh; overflow-y:auto; box-shadow:0 30px 70px rgba(20,24,50,.35); animation:popIn .2s;}
+  .modal{background:var(--card); border:1px solid var(--border); border-radius:20px; padding:26px; width:100%; max-width:480px; max-height:90vh; overflow-y:auto; box-shadow:0 30px 70px rgba(0,0,0,.6); animation:popIn .2s;}
   @keyframes popIn{from{opacity:0; transform:scale(.96) translateY(8px);} to{opacity:1; transform:none;}}
   .modal h2{font-size:17px; font-weight:800; margin-bottom:18px;}
   .field{margin-bottom:13px;}
   .field label{display:block; font-size:12px; color:var(--sub); margin-bottom:5px; font-weight:700;}
   .field input,.field select,.field textarea{
     width:100%; padding:10px 13px; border:1px solid var(--border); border-radius:12px;
-    font-size:14px; font-family:inherit; transition:border-color .15s, box-shadow .15s;
+    font-size:14px; font-family:inherit; background:var(--input-bg); color:var(--text);
+    transition:border-color .15s, box-shadow .15s;
   }
   .field input:focus,.field select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.15);}
   .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:20px;}
-  .note{font-size:11px; color:#9aa0c3; margin-top:16px; line-height:1.7;}
+  .note{font-size:11px; color:#666d94; margin-top:16px; line-height:1.7;}
 
   /* CSV期間指定 */
   .range-row{display:flex; gap:10px; align-items:center;}
@@ -185,12 +191,12 @@
   .range-sep{color:var(--sub); padding-top:18px;}
   .presets{display:flex; gap:6px; flex-wrap:wrap; margin:14px 0 4px;}
   .chip{
-    padding:6px 13px; border-radius:20px; border:1px solid var(--border); background:#f8f9fe;
+    padding:6px 13px; border-radius:20px; border:1px solid var(--border); background:#1a1e30;
     font-size:12px; font-weight:600; font-family:inherit; color:var(--sub); cursor:pointer; transition:all .12s;
   }
   .chip:hover{border-color:var(--accent); color:var(--accent); background:var(--accent-light);}
   .csv-summary{
-    margin-top:14px; background:#f8f9fe; border:1px solid var(--border); border-radius:12px;
+    margin-top:14px; background:#1a1e30; border:1px solid var(--border); border-radius:12px;
     padding:12px 15px; font-size:13px; color:var(--sub); display:flex; justify-content:space-between;
   }
   .csv-summary b{color:var(--text); font-weight:800;}
@@ -207,6 +213,7 @@
       </div>
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn" id="syncBtn" onclick="openSyncModal()">☁ 同期</button>
       <button class="btn primary" onclick="openCsvModal()">⬇ CSV出力</button>
       <button class="btn" onclick="exportJSON()">💾 バックアップ</button>
       <button class="btn" onclick="document.getElementById('jsonInput').click()">📂 復元</button>
@@ -262,7 +269,7 @@
   </div>
 
   <p class="note">
-    ※ データはこのブラウザ内(localStorage)に保存されます。別のPC・ブラウザには引き継がれないため、定期的に「💾 バックアップ」でJSON保存することをおすすめします。<br>
+    ※ データはこのブラウザ内(localStorage)に保存されます。「☁ 同期」で合言葉を設定すると、同じ合言葉を入力した別の端末とデータを自動共有できます。<br>
     ※ 読み取りはOCR+パターン認識のため、手書きや低画質では誤認識することがあります。「編集」から修正できます。<br>
     ※ 重複判定:<span class="badge exact">完全重複</span> 同一ファイルを再登録 /
     <span class="badge content">重複疑い</span> 発行元+金額+日付(または請求書番号)が一致
@@ -317,12 +324,36 @@
   </div>
 </div>
 
+<!-- 同期モーダル -->
+<div class="modal-bg" id="syncModalBg">
+  <div class="modal">
+    <h2>☁ 端末間データ同期</h2>
+    <p style="font-size:13px; color:var(--sub); line-height:1.8; margin-bottom:14px;">
+      同じ<b style="color:var(--text)">合言葉</b>を入力した端末同士で、請求書データが自動的に同期されます。スマホ・別のPCでも同じ合言葉を入力するだけでOKです。
+    </p>
+    <div class="field"><label>合言葉(8文字以上・推測されにくいもの)</label><input id="syncPass" type="password" placeholder="例: うちの経理2026-請求書管理"></div>
+    <div id="syncStatus" style="font-size:12.5px; font-weight:700; margin:6px 0;"></div>
+    <p class="note">
+      ※ 合言葉そのものは送信されず、合言葉から生成した鍵(ハッシュ)ごとにデータを保管します。<br>
+      ※ 合言葉を忘れると同じデータにアクセスできなくなります。<br>
+      ※ 同期を解除しても、この端末内のデータは消えません。
+    </p>
+    <div class="modal-actions">
+      <button class="btn danger" id="syncOffBtn" style="display:none" onclick="stopSyncClick()">同期を解除</button>
+      <button class="btn" onclick="closeSyncModal()">閉じる</button>
+      <button class="btn primary" id="syncOnBtn" onclick="startSyncClick()">同期を開始</button>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const STORE_KEY = "invoiceManagerData_v1";
+const DEL_KEY = "invoiceManagerDeleted_v1";
 let records = load();
+let deletedIds = loadDel();
 let editingId = null;
 let tesseractLoading = null;
 
@@ -330,7 +361,14 @@ let tesseractLoading = null;
 function load(){
   try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }catch(e){ return []; }
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(records)); }
+function loadDel(){
+  try{ return JSON.parse(localStorage.getItem(DEL_KEY)) || {}; }catch(e){ return {}; }
+}
+function save(){
+  localStorage.setItem(STORE_KEY, JSON.stringify(records));
+  localStorage.setItem(DEL_KEY, JSON.stringify(deletedIds));
+  if(roomRef && !applyingRemote) schedulePush();
+}
 
 /* ---------- ファイル受け取り ---------- */
 const dz = document.getElementById("dropzone");
@@ -375,6 +413,7 @@ async function processFile(file){
     memo: parsed.memo || "",
     status: "支払済",
     addedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     dup: null, dupWith: null
   };
 
@@ -540,8 +579,8 @@ function render(){
                   : r.status==="未払い" ? '<span class="badge unpaid">未払い</span>'
                   : '<span class="badge checking">確認中</span>';
     return `<tr class="${r.dup==="exact"?"dup-exact":r.dup==="content"?"dup-content":""}">
-      <td>${r.date||'<span style="color:#c3c8e4">未設定</span>'}</td>
-      <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#c3c8e4">未設定</span>'}</td>
+      <td>${r.date||'<span style="color:#4a5070">未設定</span>'}</td>
+      <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#4a5070">未設定</span>'}</td>
       <td class="memo-cell" title="${esc(r.memo)}">${esc(r.memo)}</td>
       <td class="amount">${fmtY(r.amount)}</td>
       <td>${esc(r.invoiceNo)}</td>
@@ -601,6 +640,7 @@ function saveModal(){
   r.regNo = document.getElementById("fRegNo").value.trim();
   r.memo = document.getElementById("fMemo").value.trim();
   r.status = document.getElementById("fStatus").value;
+  r.updatedAt = new Date().toISOString();
   // 編集後に重複を再判定
   r.dup = null; r.dupWith = null;
   const others = records.filter(x=>x.id!==r.id);
@@ -615,6 +655,7 @@ function saveModal(){
 function delRec(id){
   if(!confirm("この請求書を削除しますか?")) return;
   records = records.filter(r=>r.id!==id);
+  deletedIds[id] = new Date().toISOString();
   // 消した相手を参照していた重複マークを再判定
   records.forEach(r=>{
     if(r.dupWith===id){
@@ -631,6 +672,8 @@ function delRec(id){
 function clearAll(){
   if(!confirm("すべてのデータを削除します。よろしいですか?")) return;
   if(!confirm("本当に削除しますか?(バックアップ推奨)")) return;
+  const now = new Date().toISOString();
+  records.forEach(r=>{ deletedIds[r.id] = now; });
   records = []; save(); render();
 }
 
@@ -722,8 +765,164 @@ function download(blob, name){
   setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
 }
 
+/* ---------- クラウド同期(合言葉方式 / Firebase) ---------- */
+const SYNC_KEY = "invoiceManagerSync_v1";
+const firebaseConfig = {
+  apiKey: "AIzaSyD5VKfR_J98qUSfDgJ3qvI3ZZY_wiGWQgk",
+  authDomain: "invoice-manager-3a989.firebaseapp.com",
+  projectId: "invoice-manager-3a989",
+  storageBucket: "invoice-manager-3a989.firebasestorage.app",
+  messagingSenderId: "374994484531",
+  appId: "1:374994484531:web:13b1e7a9f824c6bb8a9246"
+};
+let roomRef = null, unsubSnap = null, pushTimer = null, applyingRemote = false;
+let syncConf = (()=>{ try{ return JSON.parse(localStorage.getItem(SYNC_KEY)) || null; }catch(e){ return null; } })();
+
+async function textSha256(s){
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+function mergeData(localRecs, localDel, remoteRecs, remoteDel){
+  const del = Object.assign({}, remoteDel||{});
+  for(const [id,t] of Object.entries(localDel||{})){ if(!del[id] || t > del[id]) del[id] = t; }
+  const map = new Map();
+  for(const r of (remoteRecs||[])){ if(r && r.id) map.set(r.id, r); }
+  for(const r of (localRecs||[])){
+    if(!r || !r.id) continue;
+    const ex = map.get(r.id);
+    if(!ex || (r.updatedAt||r.addedAt||"") >= (ex.updatedAt||ex.addedAt||"")) map.set(r.id, r);
+  }
+  const recs = [...map.values()].filter(r=>{
+    const dt = del[r.id];
+    return !(dt && dt >= (r.updatedAt||r.addedAt||""));
+  });
+  recs.sort((a,b)=>(b.addedAt||"").localeCompare(a.addedAt||""));
+  return {recs, del};
+}
+
+function schedulePush(){
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushToCloud, 800);
+}
+async function pushToCloud(){
+  if(!roomRef) return;
+  try{
+    await roomRef.set({
+      records: records,
+      deleted: deletedIds,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    setSyncBtn(true);
+  }catch(e){ console.error("sync push failed", e); setSyncBtn(false, true); }
+}
+
+async function startSync(pass){
+  if(typeof firebase === "undefined") throw new Error("同期ライブラリを読み込めませんでした。インターネット接続をご確認ください。");
+  if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  await firebase.auth().signInAnonymously();
+  const roomId = await textSha256("invmgr::" + pass);
+  const db = firebase.firestore();
+  roomRef = db.collection("rooms").doc(roomId);
+
+  // 初回:クラウドとローカルをマージして双方に反映
+  const snap = await roomRef.get();
+  const remote = snap.exists ? (snap.data()||{}) : {};
+  const merged = mergeData(records, deletedIds, remote.records, remote.deleted);
+  records = merged.recs; deletedIds = merged.del;
+  applyingRemote = true; save(); applyingRemote = false;
+  await roomRef.set({records, deleted: deletedIds, updatedAt: firebase.firestore.FieldValue.serverTimestamp()});
+  render();
+
+  // リアルタイム購読
+  if(unsubSnap) unsubSnap();
+  unsubSnap = roomRef.onSnapshot(s=>{
+    if(!s.exists || s.metadata.hasPendingWrites) return;
+    const d = s.data()||{};
+    const m = mergeData(records, deletedIds, d.records, d.deleted);
+    const changed = JSON.stringify(m.recs) !== JSON.stringify(records) || JSON.stringify(m.del) !== JSON.stringify(deletedIds);
+    if(!changed) return;
+    records = m.recs; deletedIds = m.del;
+    applyingRemote = true; save(); applyingRemote = false;
+    render();
+    // ローカル優先でマージ結果がリモートと異なる場合は送り返す
+    if(JSON.stringify(m.recs) !== JSON.stringify(d.records||[])) schedulePush();
+  }, err=>{ console.error("sync listen failed", err); setSyncBtn(false, true); });
+
+  setSyncBtn(true);
+}
+
+function stopSync(){
+  if(unsubSnap){ unsubSnap(); unsubSnap = null; }
+  clearTimeout(pushTimer);
+  roomRef = null; syncConf = null;
+  localStorage.removeItem(SYNC_KEY);
+  setSyncBtn(false);
+}
+
+function setSyncBtn(on, error){
+  const b = document.getElementById("syncBtn");
+  if(error){ b.textContent = "☁ 同期エラー"; b.style.color = "var(--danger)"; return; }
+  b.textContent = on ? "☁ 同期中 ✓" : "☁ 同期";
+  b.style.color = on ? "var(--ok)" : "";
+}
+
+/* 同期モーダル */
+function openSyncModal(){
+  const st = document.getElementById("syncStatus");
+  const passEl = document.getElementById("syncPass");
+  if(syncConf && roomRef){
+    st.textContent = "✅ 同期は有効です。同じ合言葉を他の端末で入力すると共有されます。";
+    st.style.color = "var(--ok)";
+    passEl.value = syncConf.pass;
+    document.getElementById("syncOffBtn").style.display = "";
+    document.getElementById("syncOnBtn").style.display = "none";
+  }else{
+    st.textContent = "";
+    passEl.value = syncConf ? syncConf.pass : "";
+    document.getElementById("syncOffBtn").style.display = syncConf ? "" : "none";
+    document.getElementById("syncOnBtn").style.display = "";
+  }
+  document.getElementById("syncModalBg").classList.add("show");
+}
+function closeSyncModal(){ document.getElementById("syncModalBg").classList.remove("show"); }
+
+async function startSyncClick(){
+  const pass = document.getElementById("syncPass").value.trim();
+  const st = document.getElementById("syncStatus");
+  if(pass.length < 8){ st.textContent = "⚠ 合言葉は8文字以上にしてください。"; st.style.color = "var(--danger)"; return; }
+  st.textContent = "⏳ 接続中…"; st.style.color = "var(--sub)";
+  try{
+    await startSync(pass);
+    syncConf = {pass};
+    localStorage.setItem(SYNC_KEY, JSON.stringify(syncConf));
+    st.textContent = "✅ 同期を開始しました!他の端末でも同じ合言葉を入力してください。";
+    st.style.color = "var(--ok)";
+    document.getElementById("syncOffBtn").style.display = "";
+    document.getElementById("syncOnBtn").style.display = "none";
+  }catch(e){
+    console.error(e);
+    st.textContent = "⚠ 接続に失敗しました:" + (e.message||e);
+    st.style.color = "var(--danger)";
+  }
+}
+function stopSyncClick(){
+  stopSync();
+  const st = document.getElementById("syncStatus");
+  st.textContent = "同期を解除しました(この端末のデータは残っています)。";
+  st.style.color = "var(--sub)";
+  document.getElementById("syncOffBtn").style.display = "none";
+  document.getElementById("syncOnBtn").style.display = "";
+}
+
+// 起動時:保存済みの合言葉があれば自動再接続
+if(syncConf && syncConf.pass){
+  startSync(syncConf.pass).catch(e=>{ console.error("auto sync failed", e); setSyncBtn(false, true); });
+}
+
 document.getElementById("modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeModal(); });
 document.getElementById("csvModalBg").addEventListener("click", e=>{ if(e.target.id==="csvModalBg") closeCsvModal(); });
+document.getElementById("syncModalBg").addEventListener("click", e=>{ if(e.target.id==="syncModalBg") closeSyncModal(); });
 render();
 </script>
 </body>
