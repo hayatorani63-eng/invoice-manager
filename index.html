@@ -270,6 +270,7 @@
 
   <p class="note">
     ※ データはこのブラウザ内(localStorage)に保存されます。「☁ 同期」で合言葉を設定すると、同じ合言葉を入力した別の端末とデータを自動共有できます。<br>
+    ※ 元ファイル(PDF/画像)もこの端末に保存され、「表示」ボタンで開けます。同期中は700KB以下のファイルが端末間で共有されます。<br>
     ※ 読み取りはOCR+パターン認識のため、手書きや低画質では誤認識することがあります。「編集」から修正できます。<br>
     ※ 重複判定:<span class="badge exact">完全重複</span> 同一ファイルを再登録 /
     <span class="badge content">重複疑い</span> 発行元+金額+日付(または請求書番号)が一致
@@ -357,6 +358,104 @@ let deletedIds = loadDel();
 let editingId = null;
 let tesseractLoading = null;
 
+/* ---------- 元ファイル保存(IndexedDB) ---------- */
+const IDB_NAME = "invmgrFiles", IDB_STORE = "files";
+const FILE_SYNC_LIMIT = 700 * 1024; // これ以下ならクラウド同期対象
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    const q = indexedDB.open(IDB_NAME, 1);
+    q.onupgradeneeded = ()=> q.result.createObjectStore(IDB_STORE);
+    q.onsuccess = ()=> res(q.result);
+    q.onerror = ()=> rej(q.error);
+  });
+}
+async function idbPut(id, val){
+  const db = await idbOpen();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(val, id);
+    tx.oncomplete = res; tx.onerror = ()=> rej(tx.error);
+  });
+}
+async function idbGet(id){
+  const db = await idbOpen();
+  return new Promise((res,rej)=>{
+    const rq = db.transaction(IDB_STORE).objectStore(IDB_STORE).get(id);
+    rq.onsuccess = ()=> res(rq.result || null);
+    rq.onerror = ()=> rej(rq.error);
+  });
+}
+async function idbDel(id){
+  const db = await idbOpen();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(id);
+    tx.oncomplete = res; tx.onerror = ()=> rej(tx.error);
+  });
+}
+function blobToB64(blob){
+  return new Promise((res,rej)=>{
+    const fr = new FileReader();
+    fr.onload = ()=> res(String(fr.result).split(",")[1]);
+    fr.onerror = ()=> rej(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+function b64ToBlob(b64, type){
+  const bin = atob(b64);
+  const u = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i);
+  return new Blob([u], {type: type || "application/pdf"});
+}
+async function uploadFileToCloud(id){
+  if(!roomRef) return;
+  const f = await idbGet(id);
+  if(!f || f.blob.size > FILE_SYNC_LIMIT) return;
+  const b64 = await blobToB64(f.blob);
+  await roomRef.collection("files").doc(id).set({
+    name: f.name, type: f.type, b64,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+async function syncFilesUp(){
+  if(!roomRef) return;
+  for(const r of records){
+    if(!r.hasFile) continue;
+    try{
+      const f = await idbGet(r.id);
+      if(!f || f.blob.size > FILE_SYNC_LIMIT) continue;
+      const doc = await roomRef.collection("files").doc(r.id).get();
+      if(!doc.exists) await uploadFileToCloud(r.id);
+    }catch(e){ console.error("file sync up failed", e); }
+  }
+}
+async function viewFile(id){
+  try{
+    let f = await idbGet(id);
+    if(!f && roomRef){
+      setProgress("クラウドからファイルを取得中…");
+      try{
+        const s = await roomRef.collection("files").doc(id).get();
+        if(s.exists){
+          const d = s.data();
+          f = {name: d.name, type: d.type, blob: b64ToBlob(d.b64, d.type)};
+          idbPut(id, f).catch(()=>{});
+        }
+      }finally{ setProgress(null); }
+    }
+    if(!f){
+      alert("この端末にはこのファイルが保存されていません。\n(登録した端末で開くか、両端末で同期を有効にしてください。700KBを超えるファイルは登録した端末のみで閲覧できます)");
+      return;
+    }
+    const url = URL.createObjectURL(f.blob);
+    window.open(url, "_blank");
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+  }catch(e){
+    console.error(e); setProgress(null);
+    alert("ファイルを開けませんでした:" + (e.message||e));
+  }
+}
+
 /* ---------- 保存/読込 ---------- */
 function load(){
   try{ return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }catch(e){ return []; }
@@ -428,6 +527,10 @@ async function processFile(file){
         `既存の請求書と内容が一致します:${d.rec.vendor||"発行元不明"} / ${fmtY(d.rec.amount)} / ${d.rec.date||"日付不明"}。二重払いにご注意ください。`);
     }
   }
+  rec.hasFile = true;
+  try{ await idbPut(rec.id, {name: file.name, type: file.type || "application/pdf", blob: file}); }
+  catch(e){ console.error("file save failed", e); rec.hasFile = false; }
+  if(rec.hasFile && roomRef) uploadFileToCloud(rec.id).catch(console.error);
   records.unshift(rec);
   save();
 }
@@ -588,6 +691,7 @@ function render(){
       <td>${dupBadge}</td>
       <td class="filename" title="${esc(r.fileName)}">${esc(r.fileName)}</td>
       <td class="row-actions">
+        ${r.hasFile?`<button onclick="viewFile('${r.id}')">表示</button>`:""}
         <button onclick="openModal('${r.id}')">編集</button>
         <button class="del" onclick="delRec('${r.id}')">削除</button>
       </td>
@@ -656,6 +760,8 @@ function delRec(id){
   if(!confirm("この請求書を削除しますか?")) return;
   records = records.filter(r=>r.id!==id);
   deletedIds[id] = new Date().toISOString();
+  idbDel(id).catch(()=>{});
+  if(roomRef) roomRef.collection("files").doc(id).delete().catch(()=>{});
   // 消した相手を参照していた重複マークを再判定
   records.forEach(r=>{
     if(r.dupWith===id){
@@ -673,7 +779,11 @@ function clearAll(){
   if(!confirm("すべてのデータを削除します。よろしいですか?")) return;
   if(!confirm("本当に削除しますか?(バックアップ推奨)")) return;
   const now = new Date().toISOString();
-  records.forEach(r=>{ deletedIds[r.id] = now; });
+  records.forEach(r=>{
+    deletedIds[r.id] = now;
+    idbDel(r.id).catch(()=>{});
+    if(roomRef) roomRef.collection("files").doc(r.id).delete().catch(()=>{});
+  });
   records = []; save(); render();
 }
 
@@ -849,6 +959,7 @@ async function startSync(pass){
     if(JSON.stringify(m.recs) !== JSON.stringify(d.records||[])) schedulePush();
   }, err=>{ console.error("sync listen failed", err); setSyncBtn(false, true); });
 
+  syncFilesUp().catch(console.error);
   setSyncBtn(true);
 }
 
