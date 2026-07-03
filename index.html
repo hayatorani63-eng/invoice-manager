@@ -4,102 +4,210 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>請求書管理ツール</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   :root{
-    --bg:#f4f6f9; --card:#ffffff; --border:#e2e8f0; --text:#1e293b; --sub:#64748b;
-    --accent:#2563eb; --accent-light:#eff6ff; --danger:#dc2626; --danger-bg:#fef2f2;
-    --warn:#d97706; --warn-bg:#fffbeb; --ok:#059669; --ok-bg:#ecfdf5;
+    --bg:#f2f4fb; --card:#ffffff; --border:#e7e9f4; --text:#1a1e35; --sub:#6b7194;
+    --accent:#6366f1; --accent2:#8b5cf6; --accent-light:#eef0ff;
+    --grad:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+    --danger:#e11d48; --danger-bg:#fff1f3;
+    --warn:#d97706; --warn-bg:#fff9ec; --ok:#059669; --ok-bg:#ebfaf3;
+    --shadow:0 8px 24px rgba(53,58,110,.08);
+    --shadow-lg:0 16px 40px rgba(53,58,110,.14);
   }
   *{box-sizing:border-box; margin:0; padding:0;}
-  body{font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif; background:var(--bg); color:var(--text); padding:24px;}
+  body{
+    font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic UI",sans-serif;
+    background:var(--bg); color:var(--text); padding:32px 20px 48px;
+    -webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(640px 320px at 88% -60px, rgba(139,92,246,.16), transparent 62%),
+      radial-gradient(560px 300px at -4% -20px, rgba(99,102,241,.14), transparent 60%),
+      radial-gradient(500px 400px at 50% 110%, rgba(56,189,248,.08), transparent 60%);
+  }
   .container{max-width:1200px; margin:0 auto;}
-  header{display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;}
-  h1{font-size:22px; font-weight:700;}
-  h1 span{font-size:12px; color:var(--sub); font-weight:400; margin-left:10px;}
+  .num{font-family:"Outfit","Noto Sans JP",sans-serif; font-feature-settings:"tnum";}
+
+  /* ヘッダー */
+  header{display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:14px;}
+  .brand{display:flex; align-items:center; gap:14px;}
+  .logo{
+    width:48px; height:48px; border-radius:14px; background:var(--grad);
+    display:flex; align-items:center; justify-content:center; font-size:24px;
+    box-shadow:0 8px 20px rgba(99,102,241,.35);
+  }
+  h1{font-size:22px; font-weight:900; letter-spacing:.01em;
+    background:linear-gradient(120deg,#1a1e35 30%,#4f46e5 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;}
+  .brand small{display:block; font-size:12px; color:var(--sub); font-weight:500; margin-top:2px;}
+
+  /* ボタン */
+  .btn{
+    padding:9px 16px; border:1px solid var(--border); border-radius:12px; background:var(--card);
+    font-size:13px; font-weight:600; font-family:inherit; color:var(--text); cursor:pointer;
+    transition:all .15s; white-space:nowrap; box-shadow:0 2px 6px rgba(53,58,110,.06);
+  }
+  .btn:hover{transform:translateY(-1px); box-shadow:0 6px 14px rgba(53,58,110,.12); border-color:#d5d9f0;}
+  .btn:active{transform:none;}
+  .btn.primary{background:var(--grad); color:#fff; border:none; box-shadow:0 6px 16px rgba(99,102,241,.35);}
+  .btn.primary:hover{box-shadow:0 10px 22px rgba(99,102,241,.45);}
+  .btn.danger{color:var(--danger); border-color:#fbd5dd;}
+  .btn.danger:hover{background:var(--danger-bg);}
+  .btn.ghost{background:transparent; box-shadow:none; border-color:transparent; color:var(--accent);}
+  .btn.ghost:hover{background:var(--accent-light); transform:none;}
 
   /* 統計カード */
-  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:20px;}
-  .stat{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 18px;}
-  .stat .label{font-size:12px; color:var(--sub); margin-bottom:4px;}
-  .stat .value{font-size:22px; font-weight:700;}
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-bottom:22px;}
+  .stat{
+    background:var(--card); border:1px solid var(--border); border-radius:16px;
+    padding:16px 18px; display:flex; align-items:center; gap:14px;
+    box-shadow:var(--shadow); transition:transform .15s, box-shadow .15s;
+  }
+  .stat:hover{transform:translateY(-2px); box-shadow:var(--shadow-lg);}
+  .stat-ic{width:44px; height:44px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;}
+  .stat:nth-child(1) .stat-ic{background:#eef0ff;}
+  .stat:nth-child(2) .stat-ic{background:#f3ecff;}
+  .stat:nth-child(3) .stat-ic{background:#e8f6ff;}
+  .stat:nth-child(4) .stat-ic{background:var(--danger-bg);}
+  .stat .label{font-size:11.5px; color:var(--sub); font-weight:600; letter-spacing:.02em; margin-bottom:3px;}
+  .stat .value{font-size:23px; font-weight:800; line-height:1.1;}
   .stat.dup .value{color:var(--danger);}
 
   /* ドロップゾーン */
-  .dropzone{background:var(--card); border:2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; cursor:pointer; transition:all .15s; margin-bottom:16px;}
-  .dropzone:hover,.dropzone.over{border-color:var(--accent); background:var(--accent-light);}
-  .dropzone .icon{font-size:34px; margin-bottom:8px;}
+  .dropzone{
+    position:relative; background:var(--card); border:2px dashed #c8cdf0; border-radius:18px;
+    padding:38px 20px; text-align:center; cursor:pointer; transition:all .18s;
+    margin-bottom:18px; box-shadow:var(--shadow); overflow:hidden;
+  }
+  .dropzone:hover,.dropzone.over{
+    border-color:var(--accent);
+    background:linear-gradient(160deg,#f6f7ff 0%,#f2edff 100%);
+    box-shadow:var(--shadow-lg);
+  }
+  .dz-icon{
+    width:58px; height:58px; margin:0 auto 12px; border-radius:50%;
+    background:var(--grad); display:flex; align-items:center; justify-content:center;
+    font-size:26px; box-shadow:0 10px 24px rgba(99,102,241,.35);
+  }
   .dropzone p{color:var(--sub); font-size:14px;}
-  .dropzone p b{color:var(--text);}
-  .dropzone small{color:#94a3b8; display:block; margin-top:6px;}
+  .dropzone p b{color:var(--text); font-weight:700;}
+  .dropzone small{color:#9aa0c3; display:block; margin-top:6px;}
   #fileInput{display:none;}
 
   /* 処理中 */
-  .progress{display:none; background:var(--accent-light); border:1px solid #bfdbfe; border-radius:8px; padding:10px 16px; margin-bottom:16px; font-size:14px; color:var(--accent);}
+  .progress{display:none; background:var(--accent-light); border:1px solid #d6d9ff; border-radius:12px; padding:11px 18px; margin-bottom:16px; font-size:13.5px; font-weight:600; color:var(--accent);}
   .progress.show{display:block;}
 
   /* 警告バナー */
-  #alertArea{position:sticky; top:8px; z-index:50;}
-  .alert{border-radius:10px; padding:14px 18px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; box-shadow:0 4px 12px rgba(0,0,0,.08); animation:slideIn .25s;}
-  @keyframes slideIn{from{opacity:0; transform:translateY(-8px);} to{opacity:1; transform:none;}}
-  .alert.exact{background:var(--danger-bg); border:1.5px solid var(--danger); color:#991b1b;}
-  .alert.content{background:var(--warn-bg); border:1.5px solid var(--warn); color:#92400e;}
+  #alertArea{position:sticky; top:10px; z-index:50;}
+  .alert{
+    border-radius:14px; padding:15px 18px; margin-bottom:10px; display:flex;
+    justify-content:space-between; align-items:flex-start; gap:12px;
+    box-shadow:var(--shadow-lg); animation:slideIn .28s; backdrop-filter:blur(6px);
+  }
+  @keyframes slideIn{from{opacity:0; transform:translateY(-10px);} to{opacity:1; transform:none;}}
+  .alert.exact{background:rgba(255,241,243,.96); border:1.5px solid var(--danger); color:#9f1239;}
+  .alert.content{background:rgba(255,249,236,.96); border:1.5px solid var(--warn); color:#92400e;}
   .alert b{display:block; margin-bottom:2px;}
   .alert .close{background:none; border:none; font-size:18px; cursor:pointer; color:inherit; line-height:1;}
 
   /* ツールバー */
-  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center;}
-  .toolbar input[type=text],.toolbar select{padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card);}
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
+  .toolbar input[type=text],.toolbar select{
+    padding:9px 13px; border:1px solid var(--border); border-radius:12px; font-size:13px;
+    font-family:inherit; background:var(--card); color:var(--text);
+    box-shadow:0 2px 6px rgba(53,58,110,.05); transition:border-color .15s, box-shadow .15s;
+  }
+  .toolbar input[type=text]:focus,.toolbar select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.15);}
   .toolbar input[type=text]{flex:1; min-width:180px;}
-  .btn{padding:8px 14px; border:1px solid var(--border); border-radius:8px; background:var(--card); font-size:13px; cursor:pointer; transition:background .1s; white-space:nowrap;}
-  .btn:hover{background:#f1f5f9;}
-  .btn.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
-  .btn.primary:hover{background:#1d4ed8;}
-  .btn.danger{color:var(--danger); border-color:#fecaca;}
-  .btn.danger:hover{background:var(--danger-bg);}
 
   /* テーブル */
-  .table-wrap{background:var(--card); border:1px solid var(--border); border-radius:12px; overflow-x:auto;}
+  .table-wrap{background:var(--card); border:1px solid var(--border); border-radius:16px; overflow-x:auto; box-shadow:var(--shadow);}
   table{width:100%; border-collapse:collapse; font-size:13px; min-width:900px;}
-  th{background:#f8fafc; text-align:left; padding:10px 12px; color:var(--sub); font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; cursor:pointer; user-select:none;}
-  th:hover{color:var(--text);}
-  td{padding:10px 12px; border-bottom:1px solid #f1f5f9; vertical-align:middle;}
+  th{
+    background:#f8f9fe; text-align:left; padding:11px 14px; color:var(--sub);
+    font-weight:700; font-size:11.5px; letter-spacing:.04em;
+    border-bottom:1px solid var(--border); white-space:nowrap; user-select:none;
+  }
+  td{padding:11px 14px; border-bottom:1px solid #f2f3fa; vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
+  tbody tr{transition:background .1s;}
+  tbody tr:hover{background:#f8f9ff;}
   tr.dup-exact{background:var(--danger-bg);}
+  tr.dup-exact:hover{background:#ffe9ee;}
   tr.dup-content{background:var(--warn-bg);}
-  .amount{font-weight:700; text-align:right; white-space:nowrap;}
-  .badge{display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; white-space:nowrap;}
-  .badge.exact{background:var(--danger); color:#fff;}
-  .badge.content{background:var(--warn); color:#fff;}
+  tr.dup-content:hover{background:#fff3d9;}
+  .amount{font-weight:800; text-align:right; white-space:nowrap; font-family:"Outfit","Noto Sans JP",sans-serif;}
+  .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap;}
+  .badge.exact{background:linear-gradient(135deg,#e11d48,#f43f5e); color:#fff; box-shadow:0 3px 8px rgba(225,29,72,.3);}
+  .badge.content{background:linear-gradient(135deg,#d97706,#f59e0b); color:#fff; box-shadow:0 3px 8px rgba(217,119,6,.3);}
   .badge.paid{background:var(--ok-bg); color:var(--ok);}
   .badge.unpaid{background:var(--danger-bg); color:var(--danger);}
   .badge.checking{background:var(--warn-bg); color:var(--warn);}
-  .row-actions{display:flex; gap:6px;}
-  .row-actions button{border:none; background:none; cursor:pointer; font-size:13px; color:var(--accent); padding:2px 4px;}
+  .row-actions{display:flex; gap:4px;}
+  .row-actions button{
+    border:none; background:none; cursor:pointer; font-size:12.5px; font-weight:600;
+    font-family:inherit; color:var(--accent); padding:4px 8px; border-radius:8px; transition:background .1s;
+  }
+  .row-actions button:hover{background:var(--accent-light);}
   .row-actions button.del{color:var(--danger);}
-  .empty{text-align:center; padding:48px 20px; color:var(--sub); font-size:14px;}
+  .row-actions button.del:hover{background:var(--danger-bg);}
+  .empty{text-align:center; padding:52px 20px; color:var(--sub); font-size:14px;}
   .filename{color:var(--sub); font-size:11px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .vendor-cell{max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .vendor-cell{max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;}
   .memo-cell{max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--sub);}
 
   /* モーダル */
-  .modal-bg{display:none; position:fixed; inset:0; background:rgba(15,23,42,.5); z-index:100; align-items:center; justify-content:center; padding:16px;}
+  .modal-bg{display:none; position:fixed; inset:0; background:rgba(20,24,50,.55); z-index:100; align-items:center; justify-content:center; padding:16px; backdrop-filter:blur(3px);}
   .modal-bg.show{display:flex;}
-  .modal{background:#fff; border-radius:14px; padding:24px; width:100%; max-width:480px; max-height:90vh; overflow-y:auto;}
-  .modal h2{font-size:17px; margin-bottom:16px;}
-  .field{margin-bottom:12px;}
-  .field label{display:block; font-size:12px; color:var(--sub); margin-bottom:4px; font-weight:600;}
-  .field input,.field select,.field textarea{width:100%; padding:9px 12px; border:1px solid var(--border); border-radius:8px; font-size:14px; font-family:inherit;}
-  .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:18px;}
-  .note{font-size:11px; color:#94a3b8; margin-top:14px; line-height:1.6;}
+  .modal{background:#fff; border-radius:20px; padding:26px; width:100%; max-width:480px; max-height:90vh; overflow-y:auto; box-shadow:0 30px 70px rgba(20,24,50,.35); animation:popIn .2s;}
+  @keyframes popIn{from{opacity:0; transform:scale(.96) translateY(8px);} to{opacity:1; transform:none;}}
+  .modal h2{font-size:17px; font-weight:800; margin-bottom:18px;}
+  .field{margin-bottom:13px;}
+  .field label{display:block; font-size:12px; color:var(--sub); margin-bottom:5px; font-weight:700;}
+  .field input,.field select,.field textarea{
+    width:100%; padding:10px 13px; border:1px solid var(--border); border-radius:12px;
+    font-size:14px; font-family:inherit; transition:border-color .15s, box-shadow .15s;
+  }
+  .field input:focus,.field select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.15);}
+  .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:20px;}
+  .note{font-size:11px; color:#9aa0c3; margin-top:16px; line-height:1.7;}
+
+  /* CSV期間指定 */
+  .range-row{display:flex; gap:10px; align-items:center;}
+  .range-row .field{flex:1; margin-bottom:0;}
+  .range-sep{color:var(--sub); padding-top:18px;}
+  .presets{display:flex; gap:6px; flex-wrap:wrap; margin:14px 0 4px;}
+  .chip{
+    padding:6px 13px; border-radius:20px; border:1px solid var(--border); background:#f8f9fe;
+    font-size:12px; font-weight:600; font-family:inherit; color:var(--sub); cursor:pointer; transition:all .12s;
+  }
+  .chip:hover{border-color:var(--accent); color:var(--accent); background:var(--accent-light);}
+  .csv-summary{
+    margin-top:14px; background:#f8f9fe; border:1px solid var(--border); border-radius:12px;
+    padding:12px 15px; font-size:13px; color:var(--sub); display:flex; justify-content:space-between;
+  }
+  .csv-summary b{color:var(--text); font-weight:800;}
 </style>
 </head>
 <body>
 <div class="container">
   <header>
-    <h1>📋 請求書管理ツール<span>支払済み請求書の一元管理・重複検知</span></h1>
-    <div style="display:flex; gap:8px;">
-      <button class="btn" onclick="exportCSV()">⬇ CSV出力</button>
+    <div class="brand">
+      <div class="logo">📋</div>
+      <div>
+        <h1>請求書管理ツール</h1>
+        <small>支払済み請求書の一元管理・重複検知</small>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn primary" onclick="openCsvModal()">⬇ CSV出力</button>
       <button class="btn" onclick="exportJSON()">💾 バックアップ</button>
       <button class="btn" onclick="document.getElementById('jsonInput').click()">📂 復元</button>
       <input type="file" id="jsonInput" accept=".json" style="display:none" onchange="importJSON(this)">
@@ -107,16 +215,16 @@
   </header>
 
   <div class="stats">
-    <div class="stat"><div class="label">登録件数</div><div class="value" id="stCount">0件</div></div>
-    <div class="stat"><div class="label">合計金額</div><div class="value" id="stTotal">¥0</div></div>
-    <div class="stat"><div class="label">今月の合計</div><div class="value" id="stMonth">¥0</div></div>
-    <div class="stat dup"><div class="label">⚠ 重複の疑い</div><div class="value" id="stDup">0件</div></div>
+    <div class="stat"><div class="stat-ic">🧾</div><div><div class="label">登録件数</div><div class="value num" id="stCount">0件</div></div></div>
+    <div class="stat"><div class="stat-ic">💰</div><div><div class="label">合計金額</div><div class="value num" id="stTotal">¥0</div></div></div>
+    <div class="stat"><div class="stat-ic">📅</div><div><div class="label">今月の合計</div><div class="value num" id="stMonth">¥0</div></div></div>
+    <div class="stat dup"><div class="stat-ic">⚠️</div><div><div class="label">重複の疑い</div><div class="value num" id="stDup">0件</div></div></div>
   </div>
 
   <div id="alertArea"></div>
 
   <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
-    <div class="icon">📄</div>
+    <div class="dz-icon">📄</div>
     <p><b>請求書をここにドラッグ&ドロップ</b>(またはクリックして選択)</p>
     <small>PDF・画像(JPG/PNG)対応/複数ファイル同時OK/内容を自動読み取りします</small>
     <input type="file" id="fileInput" multiple accept=".pdf,image/*">
@@ -177,6 +285,34 @@
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">キャンセル</button>
       <button class="btn primary" onclick="saveModal()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV出力モーダル -->
+<div class="modal-bg" id="csvModalBg">
+  <div class="modal">
+    <h2>CSV出力(期間指定)</h2>
+    <div class="range-row">
+      <div class="field"><label>開始日</label><input id="csvFrom" type="date" onchange="updateCsvCount()"></div>
+      <div class="range-sep">〜</div>
+      <div class="field"><label>終了日</label><input id="csvTo" type="date" onchange="updateCsvCount()"></div>
+    </div>
+    <div class="presets">
+      <button class="chip" onclick="csvPreset('thisMonth')">今月</button>
+      <button class="chip" onclick="csvPreset('lastMonth')">先月</button>
+      <button class="chip" onclick="csvPreset('last3')">直近3ヶ月</button>
+      <button class="chip" onclick="csvPreset('thisYear')">今年</button>
+      <button class="chip" onclick="csvPreset('all')">全期間</button>
+    </div>
+    <div class="csv-summary">
+      <span>出力対象:<b id="csvCount">0件</b></span>
+      <span>合計:<b id="csvSum" class="num">¥0</b></span>
+    </div>
+    <p class="note" style="margin-top:10px;">※ 両方空欄の場合は全件を出力します。期間を指定した場合、日付未設定の請求書は含まれません。</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeCsvModal()">キャンセル</button>
+      <button class="btn primary" onclick="exportCSV()">⬇ 出力する</button>
     </div>
   </div>
 </div>
@@ -404,8 +540,8 @@ function render(){
                   : r.status==="未払い" ? '<span class="badge unpaid">未払い</span>'
                   : '<span class="badge checking">確認中</span>';
     return `<tr class="${r.dup==="exact"?"dup-exact":r.dup==="content"?"dup-content":""}">
-      <td>${r.date||'<span style="color:#cbd5e1">未設定</span>'}</td>
-      <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#cbd5e1">未設定</span>'}</td>
+      <td>${r.date||'<span style="color:#c3c8e4">未設定</span>'}</td>
+      <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#c3c8e4">未設定</span>'}</td>
       <td class="memo-cell" title="${esc(r.memo)}">${esc(r.memo)}</td>
       <td class="amount">${fmtY(r.amount)}</td>
       <td>${esc(r.invoiceNo)}</td>
@@ -498,14 +634,71 @@ function clearAll(){
   records = []; save(); render();
 }
 
-/* ---------- 入出力 ---------- */
+/* ---------- CSV出力(期間指定) ---------- */
+function pad2(n){ return String(n).padStart(2,"0"); }
+function ymd(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+
+function openCsvModal(){
+  document.getElementById("csvModalBg").classList.add("show");
+  updateCsvCount();
+}
+function closeCsvModal(){ document.getElementById("csvModalBg").classList.remove("show"); }
+
+function csvPreset(p){
+  const now = new Date();
+  const fromEl = document.getElementById("csvFrom");
+  const toEl = document.getElementById("csvTo");
+  if(p==="thisMonth"){
+    fromEl.value = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+    toEl.value = ymd(new Date(now.getFullYear(), now.getMonth()+1, 0));
+  }else if(p==="lastMonth"){
+    fromEl.value = ymd(new Date(now.getFullYear(), now.getMonth()-1, 1));
+    toEl.value = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
+  }else if(p==="last3"){
+    fromEl.value = ymd(new Date(now.getFullYear(), now.getMonth()-2, 1));
+    toEl.value = ymd(new Date(now.getFullYear(), now.getMonth()+1, 0));
+  }else if(p==="thisYear"){
+    fromEl.value = `${now.getFullYear()}-01-01`;
+    toEl.value = `${now.getFullYear()}-12-31`;
+  }else{
+    fromEl.value = ""; toEl.value = "";
+  }
+  updateCsvCount();
+}
+
+function csvTargets(){
+  const from = document.getElementById("csvFrom").value;
+  const to = document.getElementById("csvTo").value;
+  let list = records.filter(r=>{
+    if(!from && !to) return true;
+    if(!r.date) return false;
+    if(from && r.date < from) return false;
+    if(to && r.date > to) return false;
+    return true;
+  });
+  list = list.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  return {list, from, to};
+}
+
+function updateCsvCount(){
+  const {list} = csvTargets();
+  document.getElementById("csvCount").textContent = list.length + "件";
+  document.getElementById("csvSum").textContent = fmtY(list.reduce((s,r)=>s+(r.amount||0),0));
+}
+
 function exportCSV(){
+  const {list, from, to} = csvTargets();
+  if(!list.length){ alert("指定期間に出力対象の請求書がありません。"); return; }
   const head = ["日付","発行元","内容","金額","請求書番号","登録番号","ステータス","ファイル名","重複"];
-  const rows = records.map(r=>[r.date,r.vendor,r.memo,r.amount,r.invoiceNo,r.regNo,r.status,r.fileName,
+  const rows = list.map(r=>[r.date,r.vendor,r.memo,r.amount,r.invoiceNo,r.regNo,r.status,r.fileName,
     r.dup==="exact"?"完全重複":r.dup==="content"?"重複疑い":""]);
   const csv = "﻿" + [head,...rows].map(row=>row.map(c=>`"${String(c??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
-  download(new Blob([csv],{type:"text/csv"}), `請求書一覧_${new Date().toISOString().slice(0,10)}.csv`);
+  const range = (from||to) ? `${from||"最初"}〜${to||"最新"}` : "全期間";
+  download(new Blob([csv],{type:"text/csv"}), `請求書一覧_${range}.csv`);
+  closeCsvModal();
 }
+
+/* ---------- 入出力 ---------- */
 function exportJSON(){
   download(new Blob([JSON.stringify(records,null,2)],{type:"application/json"}), `請求書バックアップ_${new Date().toISOString().slice(0,10)}.json`);
 }
@@ -530,6 +723,7 @@ function download(blob, name){
 }
 
 document.getElementById("modalBg").addEventListener("click", e=>{ if(e.target.id==="modalBg") closeModal(); });
+document.getElementById("csvModalBg").addEventListener("click", e=>{ if(e.target.id==="csvModalBg") closeCsvModal(); });
 render();
 </script>
 </body>
