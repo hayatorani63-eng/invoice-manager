@@ -773,8 +773,7 @@ async function runOcr(canvas){
 
 /* ===== OCR文字列のよくある誤読を補正 ===== */
 function fixOcrText(s){
-  let t = (s || "");
-  t = t.replace(/\u3000/g, " ");
+  let t = normalizeCjk(s);
   t = t.replace(/[！-～]/g, c=>String.fromCharCode(c.charCodeAt(0) - 0xFEE0)); // 全角→半角
   t = t.replace(/￥/g, "¥");
   t = t.replace(/(^|[^A-Za-z])[Y\\](?=\s*[0-9])/g, "$1¥");
@@ -858,6 +857,30 @@ async function ocrImage(src){ return (await ocrSmart(src)).text; }
 
 /* ---------- テキスト解析 ---------- */
 
+/* PDFによっては漢字が「康熙部首」など別のコードで埋め込まれていることがある
+   (見た目は同じだが 月=U+6708 ではなく U+2F49 等)。これを通常の漢字に直す。 */
+const RADICAL_FIX = {
+  "\u2E8C":"小","\u2E96":"心","\u2E97":"心","\u2E98":"手","\u2E9C":"日","\u2E9D":"月",
+  "\u2EA0":"民","\u2EA3":"火","\u2EA8":"犬","\u2EA9":"玉","\u2EAB":"目","\u2EAD":"示",
+  "\u2EAE":"竹","\u2EAF":"糸","\u2EB1":"网","\u2EB2":"网","\u2EB3":"网","\u2EB4":"网",
+  "\u2EB6":"羊","\u2EB9":"老","\u2EBC":"肉","\u2EBE":"草","\u2EBF":"草","\u2EC0":"草",
+  "\u2EC1":"虎","\u2EC2":"衣","\u2EC3":"西","\u2EC4":"西","\u2EC7":"角","\u2EC8":"言",
+  "\u2ECD":"辵","\u2ECE":"辵","\u2ECF":"邑","\u2ED1":"長","\u2ED2":"長","\u2ED4":"門",
+  "\u2ED5":"阜","\u2ED6":"阜","\u2ED7":"雨","\u2ED8":"青","\u2EDA":"頁","\u2EDB":"風",
+  "\u2EDC":"飛","\u2EDD":"食","\u2EDE":"食","\u2EDF":"食","\u2EE1":"首","\u2EE2":"馬",
+  "\u2EE3":"骨","\u2EE4":"鬼","\u2EE5":"魚","\u2EE6":"鳥","\u2EE9":"黄","\u2EEE":"歯",
+  "\u2EEF":"龍","\u2EF0":"龍","\u2EF1":"龜"
+};
+function normalizeCjk(s){
+  let t = String(s || "");
+  // NFKC: 康熙部首(U+2F00〜)・全角英数・特殊空白などをまとめて標準形へ
+  try{ t = t.normalize("NFKC"); }catch(e){}
+  // NFKCで戻らない「CJK部首補助」を手当て
+  t = t.replace(/[\u2E80-\u2EF3]/g, c => RADICAL_FIX[c] || c);
+  t = t.replace(/[\u00A0\u2002-\u200B\u3000]/g, " ");
+  return t;
+}
+
 /* 過去に「御中」で登場した宛先(=自社名)を覚えておき、発行元候補から除外する */
 const RECIP_KEY = "invoiceManagerRecipients_v1";
 let knownRecipients = (()=>{
@@ -925,7 +948,7 @@ function parseInvoiceText(text){
   const t = fixOcrText(text);
   // 金額・日付は正規化後(lines)、社名・摘要は原文(raws)を使う
   const normArr = t.split(/\n/).map(l=>l.trim());
-  const rawArr = String(text || "").replace(/\u3000/g, " ").split(/\n/).map(l=>l.trim());
+  const rawArr = normalizeCjk(text).split(/\n/).map(l=>l.trim());
   const lines = [], raws = [];
   for(let i=0; i<normArr.length; i++){
     if(!normArr[i]) continue;
@@ -989,7 +1012,7 @@ function parseInvoiceText(text){
      ・支払期限/納期/有効期限などは強くマイナスして請求日と取り違えない
      ・和暦(元年含む)、2桁年、YYYYMMDD、英語表記に対応
      ・実在しない日付(2/30 等)は除外、遠い未来は減点、同じ日付の複数出現は加点 */
-  const D_POS_SRC = "(発行日|請求日|取引日|ご?利用日|お?買上げ?日|お?買い上げ日|領収日|作成日|計上日|日\\s*付|年月日|Invoice\\s*Date|Issue\\s*Date|Date)";
+  const D_POS_SRC = "(発行日|請求日|取引日|ご?利用日|お?買上げ?日|お?買い上げ日|領収日|作成日|計上日|支払対象日|お?支払日|日\\s*付|年月日|Invoice\\s*Date|Issue\\s*Date|Date)";
   const D_NEG_SRC = "(支払期[日限]|お?支払い?期[日限]|振込期[日限]|入金期[日限]|納\\s*期|締\\s*切|締\\s*日|有効期限|期\\s*限|Due\\s*Date)";
   const MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
   const TODAY = new Date();
@@ -1134,6 +1157,24 @@ function parseInvoiceText(text){
     if(furiIdx < 0 && /(振\s*込\s*先|お振込先|振込口座|振替先|お支払口座)/.test(raws[i])) furiIdx = i;
   }
 
+  /* 支払明細書・支払通知書は自社が発行する書類なので、
+     記録すべき相手方は発行元(自社)ではなく宛名(◯◯様 / ◯◯御中)のほう */
+  const SELF_ISSUED = /(外注支払明細書|支払明細書|支払通知書|支払調書|お?支払明細)/;
+  let selfIssued = false;
+  for(let i=0; i<Math.min(raws.length, 6); i++){
+    if(SELF_ISSUED.test(raws[i])){ selfIssued = true; break; }
+  }
+  if(selfIssued){
+    for(let i=0; i<Math.min(raws.length, 10); i++){
+      const m = raws[i].match(/^\s*([^\s]{1,30})\s+(?:様|御中)(?:\s|$)/)
+             || raws[i].match(/^\s*([^\s]{2,30}?)(?:様|御中)(?:\s|$)/);
+      if(m){
+        const nm = cleanVendorName(m[1]);
+        if(nm && nm.replace(/\s/g,"").length >= 2){ out.vendor = nm; break; }
+      }
+    }
+  }
+
   // 宛先(自社)の行を特定して記憶する
   const recipRows = new Set();
   for(let i=0; i<raws.length; i++){
@@ -1199,18 +1240,52 @@ function parseInvoiceText(text){
     }
   }
 
-  if(vend.length){
+  if(!out.vendor && vend.length){
     vend.sort((a,b)=> b.sc - a.sc);
     out.vendor = vend[0].name;
   }
 
   /* ===== 内容・摘要 ===== */
-  const MEMO_RE = /(?:件\s*名|品\s*名|摘\s*要|内\s*容|但し?書?|但)\s*[:：]?\s*(.+)/;
+  /* 「内容をご確認ください」のような文中の語を拾わないよう、
+     ラベルの後に区切り(: や空白)があるものだけを対象にする */
+  const MEMO_KEY = "(?:件\\s*名|品\\s*名|摘\\s*要|内\\s*容|但し?書?|但)";
+  const MEMO_COLON = new RegExp(MEMO_KEY + "\\s*[:：]\\s*(.+)");
+  const MEMO_HEAD = new RegExp("^\\s*" + MEMO_KEY + "\\s+(.+)");
+  const PARTICLE = /^[をはがにのでともへやよ、。・]/;   // 文の途中で拾った印
+  const HEADERISH = /^(?:\s*(?:明細|項目|品名|内容|摘要|数量|単価|金額|税率|備考|単位|小計|合計)\s*)+$/;
+
+  function cleanMemo(v){
+    return String(v || "")
+      .replace(/^[\s・:：|｜]+/, "")
+      .replace(/(として|上記正に領収).*$/, "")
+      .trim();
+  }
+
   for(let i=0; i<raws.length; i++){
-    const m = raws[i].match(MEMO_RE) || lines[i].match(MEMO_RE);
+    const m = raws[i].match(MEMO_COLON) || raws[i].match(MEMO_HEAD);
     if(!m) continue;
-    const v = m[1].replace(/^[\s・:：]+/, "").replace(/(として|上記正に領収).*$/, "").trim();
-    if(v){ out.memo = v.slice(0, 60); break; }
+    const v = cleanMemo(m[1]);
+    if(!v || PARTICLE.test(v)) continue;
+    out.memo = v.slice(0, 60);
+    break;
+  }
+  // ラベルが無い場合は「明細」「項目 金額」等の見出しの次の行を採用する
+  if(!out.memo){
+    for(let i=0; i<raws.length; i++){
+      if(!HEADERISH.test(raws[i])) continue;
+      for(let k=i+1; k<=i+3 && k<raws.length; k++){
+        const cand = raws[k];
+        if(!cand || HEADERISH.test(cand)) continue;
+        if(!/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFFA-Za-z]/.test(cand)) continue;
+        if(/^[¥\d,.\s-]+$/.test(cand)) continue;
+        const v = cleanMemo(cand.replace(/\s*[¥]?[\d,]{3,}\s*円?\s*$/, ""));
+        if(v && !PARTICLE.test(v) && v.replace(/\s/g,"").length >= 3){
+          out.memo = v.slice(0, 60);
+          break;
+        }
+      }
+      if(out.memo) break;
+    }
   }
 
   return out;
