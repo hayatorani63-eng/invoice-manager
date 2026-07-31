@@ -274,6 +274,7 @@
     <span class="sum" id="selSum">合計 ¥0</span>
     <span class="spacer"></span>
     <button class="btn ghost" onclick="clearSelection()">選択を解除</button>
+    <button class="btn" onclick="reanalyzeSelected()" title="元ファイルがある項目だけ、もう一度読み取り直します">🔄 選択項目を再解析</button>
     <button class="btn danger" onclick="deleteSelected()">🗑 選択した項目を削除</button>
   </div>
 
@@ -1157,6 +1158,21 @@ function parseInvoiceText(text){
     if(furiIdx < 0 && /(振\s*込\s*先|お振込先|振込口座|振替先|お支払口座)/.test(raws[i])) furiIdx = i;
   }
 
+  /* レシート/領収書判定
+     レシートは末尾に親会社の「株式会社◯◯」と登録番号Tがまとまっており、
+     利用者が知りたい「店名」は先頭にある。
+     従って:
+       ・tIdx(登録番号) 近傍への加点は無効化(親会社が勝ってしまうため)
+       ・先頭ラインを大きく優遇
+       ・非法人格の店名も先頭数行から候補として拾う */
+  const RECEIPT_TITLE = /(レシート|Receipt|お?買上明細|購入明細|会計明細)/i;
+  const RECEIPT_ONLY_TITLE = /^[※◆■\s]*領収書?[※◆■\s]*$/;
+  const NON_RECEIPT = /(請求書|納品書|支払明細書|外注支払明細|支払通知|支払調書|見積書?|Invoice)/i;
+  const headSlice = raws.slice(0, 10);
+  const receiptMode = (headSlice.some(l=>RECEIPT_TITLE.test(l)) ||
+                       headSlice.some(l=>RECEIPT_ONLY_TITLE.test(l)))
+                    && !headSlice.some(l=>NON_RECEIPT.test(l));
+
   /* 支払明細書・支払通知書は自社が発行する書類なので、
      記録すべき相手方は発行元(自社)ではなく宛名(◯◯様 / ◯◯御中)のほう */
   const SELF_ISSUED = /(外注支払明細書|支払明細書|支払通知書|支払調書|お?支払明細)/;
@@ -1191,9 +1207,11 @@ function parseInvoiceText(text){
   const isKnownRecipient = nm => knownRecipients.has(normalize(nm));
 
   function vendorScore(i, line, name){
-    let sc = 10 + Math.max(0, 8 - i * 0.5);          // 上部をわずかに優遇
+    // レシートは先頭に店名、末尾に親会社が来るので、より強く先頭優遇する
+    let sc = 10 + (receiptMode ? Math.max(0, 40 - i * 5) : Math.max(0, 8 - i * 0.5));
     if(VEND_LABEL.test(line)) sc += 45;              // 「発行元:」等のラベル付き
-    if(tIdx >= 0 && Math.abs(i - tIdx) <= 4) sc += 45; // 登録番号の近く=発行者ブロック
+    // レシートでは登録番号=親会社ブロックにあるため、この加点は行わない
+    if(!receiptMode && tIdx >= 0 && Math.abs(i - tIdx) <= 4) sc += 45;
     if(furiIdx >= 0 && i > furiIdx && i - furiIdx <= 6) sc -= 70; // 振込先ブロック
     if(BANKISH.test(line)) sc -= 60;                 // 銀行名・支店名
     for(let k=i+1; k<=i+3 && k<raws.length; k++){
@@ -1232,10 +1250,38 @@ function parseInvoiceText(text){
       if(NOISE.test(line) || BANKISH.test(line)) continue;
       const name = cleanVendorName(line);
       if(!name || isKnownRecipient(name)) continue;
-      const shopish = /(店|商店|事務所|工房|堂|屋|サービス|クリニック|薬局|Shop|Store|Cafe)/i.test(line);
+      const shopish = /(店|支店|商店|事務所|工房|堂|屋|サービス|クリニック|薬局|Shop|Store|Cafe|Coffee|Bakery|Market)/i.test(line);
       let sc = (shopish ? 20 : 5) - i;
       if(VEND_LABEL.test(line)) sc += 45;
       if(tIdx >= 0 && Math.abs(i - tIdx) <= 4) sc += 30;
+      vend.push({name: name, sc: sc});
+    }
+  }
+
+  /* レシート専用: 法人格が別途拾えていても、先頭付近の店名を強い候補として投入する
+     (現実のレシートは「セブン-イレブン ○○店」等が先頭・「株式会社セブン-イレブン・ジャパン」が末尾に来るため、
+      放置すると親会社側が採用されてしまう) */
+  if(receiptMode){
+    const ADDR_HEAD = /^\s*(〒|TEL|Tel|T\s*E\s*L|電\s*話|FAX|Fax|住\s*所|Address)/i;
+    for(let i=0; i<Math.min(raws.length, 6); i++){
+      const line = raws[i];
+      if(recipRows.has(i)) continue;
+      if(TITLE.test(line) || RECEIPT_ONLY_TITLE.test(line) || RECEIPT_TITLE.test(line)) continue;
+      if(/様\s*$/.test(line)) continue;
+      if(!LETTER.test(line) || digitHeavy(line)) continue;
+      if(line.replace(/\s/g, "").length < 2) continue;
+      if(NOISE.test(line) || BANKISH.test(line) || ADDR_HEAD.test(line)) continue;
+      const name = cleanVendorName(line);
+      if(!name || name.replace(/\s/g, "").length < 2) continue;
+      if(isKnownRecipient(name)) continue;
+      const shopish = /(店|支店|店舗|商店|事務所|工房|堂|屋|サービス|クリニック|薬局|カフェ|喫茶|Shop|Store|Cafe|Coffee|Bakery|Market|Restaurant)/i.test(name);
+      // 上部ほど高く。tIdx近傍加点は行わない
+      let sc = 90 + Math.max(0, 30 - i * 6) + (shopish ? 20 : 0);
+      if(VEND_LABEL.test(line)) sc += 30;
+      // 直後の行が住所/電話ならさらに加点(店舗情報ブロック)
+      for(let k=i+1; k<=i+3 && k<raws.length; k++){
+        if(/(〒|TEL|Tel|電\s*話|住\s*所)/i.test(raws[k])){ sc += 15; break; }
+      }
       vend.push({name: name, sc: sc});
     }
   }
@@ -1466,6 +1512,90 @@ function purge(ids){
   records = records.filter(r=>!set.has(r.id));
   ids.forEach(id=>selectedIds.delete(id));
   recheckDupRefs(set);
+}
+
+/* 元ファイル(IndexedDB)から抽出をやり直して1件分を上書きする */
+async function reanalyzeOne(id){
+  const rec = records.find(x=>x.id===id);
+  if(!rec) return {ok:false, reason:"missing"};
+  let f = await idbGet(id);
+  // クラウド同期経由でIndexedDBに未取込のケースはローカル対象外(要件どおり)
+  if(!f) return {ok:false, reason:"no-file"};
+
+  let text = "", parsed = null;
+  const type = f.type || "application/pdf";
+  if(type === "application/pdf" || /\.pdf$/i.test(f.name || rec.fileName || "")){
+    const buf = await f.blob.arrayBuffer();
+    const r = await extractPdfText(buf);
+    text = r.text; parsed = r.parsed;
+  }else{
+    const r = await ocrSmart(f.blob);
+    text = r.text; parsed = r.parsed;
+  }
+  if(!parsed) parsed = parseInvoiceText(text || "");
+
+  rec.vendor = parsed.vendor || "";
+  rec.date = parsed.date || "";
+  rec.amount = parsed.amount || 0;
+  rec.invoiceNo = parsed.invoiceNo || "";
+  rec.regNo = parsed.regNo || "";
+  rec.memo = parsed.memo || "";
+  rec.updatedAt = new Date().toISOString();
+
+  // 重複判定をやり直す(自身は除外)
+  rec.dup = null; rec.dupWith = null;
+  const bak = records;
+  records = bak.filter(x=>x.id!==rec.id);
+  const d = findDuplicate(rec);
+  records = bak;
+  if(d){ rec.dup = d.type; rec.dupWith = d.rec.id; }
+  return {ok:true};
+}
+
+async function reanalyzeSelected(){
+  const ids = [...selectedIds];
+  if(!ids.length){ alert("再解析する項目が選択されていません。"); return; }
+
+  // IndexedDBに元ファイルがあるものだけを対象にする
+  const targets = [];
+  const noFile = [];
+  for(const id of ids){
+    const r = records.find(x=>x.id===id);
+    if(!r) continue;
+    try{
+      const f = await idbGet(id);
+      if(f) targets.push({id, name: r.fileName || id});
+      else noFile.push(r.fileName || id);
+    }catch(e){ noFile.push(r.fileName || id); }
+  }
+  if(!targets.length){
+    alert("選択した項目には、この端末に保存された元ファイルがありません。\n(元ファイルを登録した端末で操作するか、同期対象の700KB以下のファイルのみ再解析できます)");
+    return;
+  }
+  const skipMsg = noFile.length ? `\n(元ファイルが無い ${noFile.length}件はスキップされます)` : "";
+  if(!confirm(`選択した ${targets.length}件を再解析します。${skipMsg}\n\n※ 発行元・日付・金額などが自動で書き換わります。編集済みの内容は上書きされます。`)) return;
+
+  let done = 0, failed = 0;
+  const failedNames = [];
+  for(let i=0; i<targets.length; i++){
+    const t = targets[i];
+    setProgress(`再解析中… (${i+1}/${targets.length}) ${t.name}`);
+    try{
+      const r = await reanalyzeOne(t.id);
+      if(r.ok) done++;
+      else { failed++; failedNames.push(t.name); }
+    }catch(e){
+      console.error("re-analyze failed", e);
+      failed++; failedNames.push(t.name);
+    }
+  }
+  setProgress(null);
+  save(); render();
+
+  let body = `${done}件を再解析しました。`;
+  if(failed) body += ` ${failed}件は失敗しました:${failedNames.slice(0,3).join(", ")}${failedNames.length>3?" 他":""}`;
+  if(noFile.length) body += ` 元ファイル無しでスキップ:${noFile.length}件。`;
+  showAlert(failed ? "content" : "content", "🔄 再解析が完了しました", body);
 }
 
 function deleteSelected(){
