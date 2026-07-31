@@ -132,6 +132,18 @@
   .toolbar input[type=text]:focus,.toolbar select:focus{outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(99,102,241,.15);}
   .toolbar input[type=text]{flex:1; min-width:180px;}
 
+  /* --- 選択・一括操作 --- */
+  .chk-col{width:38px; text-align:center; padding-left:10px; padding-right:0;}
+  table input[type=checkbox]{width:16px; height:16px; accent-color:var(--accent); cursor:pointer;}
+  tr.selected{background:var(--accent-light);}
+  .selbar{display:none; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-bottom:12px; padding:10px 14px; border-radius:14px;
+    background:var(--accent-light); border:1px solid var(--border);}
+  .selbar.show{display:flex;}
+  .selbar .cnt{font-weight:700; font-size:14px;}
+  .selbar .sum{color:var(--sub); font-size:13px;}
+  .selbar .spacer{flex:1;}
+
   /* テーブル */
   .table-wrap{background:var(--card); border:1px solid var(--border); border-radius:16px; overflow-x:auto; box-shadow:var(--shadow);}
   table{width:100%; border-collapse:collapse; font-size:13px; min-width:900px;}
@@ -257,9 +269,18 @@
     <button class="btn danger" onclick="clearAll()">全削除</button>
   </div>
 
+  <div class="selbar" id="selBar">
+    <span class="cnt" id="selCount">0件を選択中</span>
+    <span class="sum" id="selSum">合計 ¥0</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" onclick="clearSelection()">選択を解除</button>
+    <button class="btn danger" onclick="deleteSelected()">🗑 選択した項目を削除</button>
+  </div>
+
   <div class="table-wrap">
     <table>
       <thead><tr>
+        <th class="chk-col"><input type="checkbox" id="chkAll" onchange="toggleAll(this.checked)" title="表示中をすべて選択"></th>
         <th>日付</th><th>発行元</th><th>内容</th><th style="text-align:right">金額(税込)</th>
         <th>請求書番号</th><th>ステータス</th><th>重複</th><th>ファイル</th><th></th>
       </tr></thead>
@@ -492,13 +513,15 @@ async function processFile(file){
   const buf = await file.arrayBuffer();
   const hash = await sha256(buf);
 
-  let text = "";
+  let text = "", parsed = null;
   if(file.type==="application/pdf" || /\.pdf$/i.test(file.name)){
-    text = await extractPdfText(buf);
+    const r = await extractPdfText(buf);
+    text = r.text; parsed = r.parsed;
   }else{
-    text = await ocrImage(file);
+    const r = await ocrSmart(file);
+    text = r.text; parsed = r.parsed;
   }
-  const parsed = parseInvoiceText(text || "");
+  if(!parsed) parsed = parseInvoiceText(text || "");
 
   const rec = {
     id: Date.now() + "_" + Math.random().toString(36).slice(2,7),
@@ -566,16 +589,19 @@ async function extractPdfText(buf){
     text += tc.items.map(it=>it.str).join("\n") + "\n";
   }
   if(text.replace(/\s/g,"").length < 30){
-    // テキスト層なし(スキャンPDF)→ 1ページ目を画像化してOCR
+    // テキスト層なし(スキャンPDF)→ 1ページ目を高解像度で画像化してOCR
     setProgress("スキャンPDFを検出。OCRで読み取り中…(初回は少し時間がかかります)");
     const page = await pdf.getPage(1);
-    const vp = page.getViewport({scale:2});
+    const vp0 = page.getViewport({scale:1});
+    const scale = Math.min(3, Math.max(2, OCR_TARGET_LONG / Math.max(vp0.width, vp0.height)));
+    const vp = page.getViewport({scale});
     const canvas = document.createElement("canvas");
     canvas.width = vp.width; canvas.height = vp.height;
     await page.render({canvasContext:canvas.getContext("2d"), viewport:vp}).promise;
-    text = await ocrImage(canvas);
+    const r = await ocrSmart(canvas);
+    return {text: r.text, parsed: r.parsed};
   }
-  return text;
+  return {text: text, parsed: null};
 }
 
 async function loadTesseract(){
@@ -590,56 +616,602 @@ async function loadTesseract(){
   }
   await tesseractLoading;
 }
-async function ocrImage(src){
-  await loadTesseract();
-  setProgress("OCRで文字を読み取り中…(初回は日本語データの取得に時間がかかります)");
-  const result = await Tesseract.recognize(src, "jpn+eng");
-  return result.data.text || "";
+
+/* ===== 画像前処理(OCR精度向上) ===== */
+const OCR_TARGET_LONG = 2000;
+
+async function toCanvas(src){
+  if(src instanceof HTMLCanvasElement) return src;
+  const isBlob = (typeof Blob !== "undefined") && (src instanceof Blob);
+  const url = isBlob ? URL.createObjectURL(src) : src;
+  try{
+    const img = await new Promise((res,rej)=>{
+      const i = new Image();
+      i.onload = ()=>res(i);
+      i.onerror = ()=>rej(new Error("画像を読み込めませんでした"));
+      i.src = url;
+    });
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth || img.width;
+    c.height = img.naturalHeight || img.height;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c;
+  }finally{
+    if(isBlob) setTimeout(()=>URL.revokeObjectURL(url), 3000);
+  }
 }
 
-/* ---------- テキスト解析 ---------- */
-function parseInvoiceText(text){
-  const t = text.replace(/[！-～]/g, c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)); // 全角→半角
-  const lines = t.split(/\n/).map(l=>l.trim()).filter(Boolean);
+// 長辺を2000px前後に。小さい画像は拡大、巨大な写真は縮小(OCRは300dpi相当が最も安定)
+function resizeCanvas(src, target){
+  const long = Math.max(src.width, src.height);
+  if(!long) return src;
+  let k = target / long;
+  if(k > 4) k = 4;
+  if(k > 0.9 && k < 1.5) return src;
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(src.width * k));
+  c.height = Math.max(1, Math.round(src.height * k));
+  const g = c.getContext("2d");
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
+  g.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+
+function rotateCanvas(src, deg){
+  if(!deg) return src;
+  const c = document.createElement("canvas");
+  if(deg === 90 || deg === 270){ c.width = src.height; c.height = src.width; }
+  else { c.width = src.width; c.height = src.height; }
+  const g = c.getContext("2d");
+  g.translate(c.width/2, c.height/2);
+  g.rotate(deg * Math.PI / 180);
+  g.drawImage(src, -src.width/2, -src.height/2);
+  return c;
+}
+
+// グレースケール化 + 上下2%を切ったコントラスト伸長
+function toGrayContrast(src){
+  const c = document.createElement("canvas");
+  c.width = src.width; c.height = src.height;
+  const g = c.getContext("2d");
+  g.drawImage(src, 0, 0);
+  const im = g.getImageData(0, 0, c.width, c.height);
+  const d = im.data, n = c.width * c.height;
+  const gray = new Uint8ClampedArray(n);
+  const hist = new Uint32Array(256);
+  for(let i=0, p=0; i<n; i++, p+=4){
+    const v = (d[p]*0.299 + d[p+1]*0.587 + d[p+2]*0.114) | 0;
+    gray[i] = v; hist[v]++;
+  }
+  let acc = 0, lo = 0, hi = 255;
+  for(let v=0; v<256; v++){ acc += hist[v]; if(acc >= n*0.02){ lo = v; break; } }
+  acc = 0;
+  for(let v=0; v<256; v++){ acc += hist[v]; if(acc >= n*0.98){ hi = v; break; } }
+  if(hi - lo < 20){ lo = 0; hi = 255; }
+  const scale = 255 / (hi - lo);
+  for(let i=0, p=0; i<n; i++, p+=4){
+    let v = (gray[i] - lo) * scale;
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    d[p] = d[p+1] = d[p+2] = v; d[p+3] = 255;
+    gray[i] = v;
+  }
+  g.putImageData(im, 0, 0);
+  return {canvas: c, gray: gray};
+}
+
+// 適応的2値化(積分画像による局所平均)。影・照明ムラのある写真に強い
+function adaptiveBinarize(src, gray){
+  const w = src.width, h = src.height;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  const im = g.createImageData(w, h);
+  const d = im.data;
+  const win = (Math.max(15, Math.floor(Math.min(w, h) / 20)) | 1);
+  const r = win >> 1, C = 10;
+  const W = w + 1;
+  const integ = new Float64Array(W * (h + 1));
+  for(let y=0; y<h; y++){
+    let rowSum = 0;
+    for(let x=0; x<w; x++){
+      rowSum += gray[y*w + x];
+      integ[(y+1)*W + (x+1)] = integ[y*W + (x+1)] + rowSum;
+    }
+  }
+  for(let y=0; y<h; y++){
+    const y0 = Math.max(0, y-r), y1 = Math.min(h-1, y+r);
+    for(let x=0; x<w; x++){
+      const x0 = Math.max(0, x-r), x1 = Math.min(w-1, x+r);
+      const area = (y1-y0+1) * (x1-x0+1);
+      const sum = integ[(y1+1)*W + (x1+1)] - integ[y0*W + (x1+1)] - integ[(y1+1)*W + x0] + integ[y0*W + x0];
+      const v = gray[y*w + x] < (sum/area) - C ? 0 : 255;
+      const p = (y*w + x) * 4;
+      d[p] = d[p+1] = d[p+2] = v; d[p+3] = 255;
+    }
+  }
+  g.putImageData(im, 0, 0);
+  return c;
+}
+
+/* ===== OCR実行(ワーカーを使い回し + パラメータ指定) ===== */
+let ocrWorker = null, ocrWorkerPromise = null;
+
+async function getOcrWorker(){
+  if(ocrWorker) return ocrWorker;
+  if(!ocrWorkerPromise){
+    ocrWorkerPromise = (async ()=>{
+      await loadTesseract();
+      const w = await Tesseract.createWorker();
+      await w.loadLanguage("jpn+eng");
+      await w.initialize("jpn+eng");
+      await w.setParameters({
+        tessedit_pageseg_mode: "6",      // 一様なテキストブロックとして扱う
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300"
+      });
+      ocrWorker = w;
+      return w;
+    })().catch(e=>{ ocrWorkerPromise = null; throw e; });
+  }
+  return ocrWorkerPromise;
+}
+
+async function runOcr(canvas){
+  try{
+    const w = await getOcrWorker();
+    const res = await w.recognize(canvas);
+    return (res && res.data && res.data.text) || "";
+  }catch(e){
+    console.warn("worker OCR failed, fallback to recognize()", e);
+    ocrWorker = null; ocrWorkerPromise = null;
+    await loadTesseract();
+    const r = await Tesseract.recognize(canvas, "jpn+eng");
+    return (r && r.data && r.data.text) || "";
+  }
+}
+
+/* ===== OCR文字列のよくある誤読を補正 ===== */
+function fixOcrText(s){
+  let t = (s || "");
+  t = t.replace(/\u3000/g, " ");
+  t = t.replace(/[！-～]/g, c=>String.fromCharCode(c.charCodeAt(0) - 0xFEE0)); // 全角→半角
+  t = t.replace(/￥/g, "¥");
+  t = t.replace(/(^|[^A-Za-z])[Y\\](?=\s*[0-9])/g, "$1¥");
+  // 数字の並びに紛れ込んだ英字を数字に戻す(O→0, l/I→1)。
+  // 改行はまたがず、英単語の一部(Jul, Total 等)は壊さない
+  t = t.replace(
+    /(^|[^A-Za-z0-9OolIｌ|])([0-9OolIｌ|][0-9OolIｌ|,.\/\- \t]{1,}[0-9OolIｌ|])(?![A-Za-z])/g,
+    (whole, pre, run)=>{
+      if(!/[0-9]/.test(run)) return whole;
+      return pre + run.replace(/[Oo]/g, "0").replace(/[lIｌ|]/g, "1");
+    }
+  );
+  // 3桁区切りがピリオド/スペースになったものをカンマに寄せる
+  t = t.replace(/(\d)[.\ \t](\d{3})(?![\d])/g, "$1,$2");
+  return t;
+}
+
+/* ===== 複数パスOCR：補正画像→2値化画像→(必要なら)回転 ===== */
+function scoreParsed(p, text){
+  let s = 0;
+  if(p.amount) s += 40;
+  if(p.date) s += 25;
+  if(p.vendor) s += 20;
+  if(p.invoiceNo) s += 8;
+  if(p.regNo) s += 8;
+  s += Math.min(20, (text || "").replace(/\s/g, "").length / 40);
+  return s;
+}
+function mergeParsed(a, b){
   const out = {};
+  ["amount","date","vendor","invoiceNo","regNo","memo"].forEach(k=>{
+    const v = a[k] || b[k];
+    if(v) out[k] = v;
+  });
+  return out;
+}
 
-  // 金額:「合計」「ご請求金額」等の近くを優先、なければ最大値
-  const kwAmt = t.match(/(?:合\s*計|ご?請求金額|請求金額|総額|お支払い?金額|税込合計)[^0-9¥￥]{0,15}[¥￥]?\s*([0-9][0-9,]*)/);
-  if(kwAmt){ out.amount = parseInt(kwAmt[1].replace(/,/g,""),10); }
-  else{
-    const all = [...t.matchAll(/[¥￥]\s*([0-9][0-9,]{2,})/g), ...t.matchAll(/([0-9][0-9,]{3,})\s*円/g)]
-      .map(m=>parseInt(m[1].replace(/,/g,""),10)).filter(n=>n>0 && n<100000000);
-    if(all.length) out.amount = Math.max(...all);
+async function ocrSmart(src){
+  await loadTesseract();
+  setProgress("画像を補正しています…");
+  const base = await toCanvas(src);
+  const sized = resizeCanvas(base, OCR_TARGET_LONG);
+  const gc = toGrayContrast(sized);
+
+  setProgress("OCRで文字を読み取り中…(1/2・初回は日本語データの取得に時間がかかります)");
+  const t1 = fixOcrText(await runOcr(gc.canvas));
+  const p1 = parseInvoiceText(t1);
+  const passes = [{text: t1, parsed: p1, score: scoreParsed(p1, t1)}];
+
+  // 金額か日付が取れなければ2値化して再挑戦
+  if(!(p1.amount && p1.date)){
+    setProgress("精度を上げるため画像を2値化して再解析中…(2/2)");
+    const bin = adaptiveBinarize(gc.canvas, gc.gray);
+    const t2 = fixOcrText(await runOcr(bin));
+    const p2 = parseInvoiceText(t2);
+    passes.push({text: t2, parsed: p2, score: scoreParsed(p2, t2)});
   }
 
-  // 日付(西暦・令和対応)
-  let dm = t.match(/(20\d{2})\s*[年\/\-\.]\s*(\d{1,2})\s*[月\/\-\.]\s*(\d{1,2})/);
-  if(dm){ out.date = `${dm[1]}-${String(dm[2]).padStart(2,"0")}-${String(dm[3]).padStart(2,"0")}`; }
-  else{
-    dm = t.match(/令和\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-    if(dm){ out.date = `${2018+parseInt(dm[1],10)}-${String(dm[2]).padStart(2,"0")}-${String(dm[3]).padStart(2,"0")}`; }
-  }
-
-  // 請求書番号
-  const inv = t.match(/(?:請求書番号|請求書No\.?|請求No\.?|伝票番号|Invoice\s*(?:No\.?|#))[::\s\.]*([A-Za-z0-9][A-Za-z0-9\-_\/]{1,29})/i);
-  if(inv) out.invoiceNo = inv[1];
-
-  // インボイス登録番号
-  const reg = t.match(/T\d{13}/);
-  if(reg) out.regNo = reg[0];
-
-  // 発行元:会社名を含む行のうち、宛先(御中・様)でないもの
-  const corpRe = /(株式会社|合同会社|有限会社|㈱|\(株\)|Inc\.|Co\.,?\s*Ltd)/;
-  for(const line of lines){
-    if(corpRe.test(line) && !/御中|様\s*$/.test(line)){
-      out.vendor = line.replace(/^(発行者?|発行元|請求元)[::\s]*/,"").slice(0,50);
-      break;
+  // ほとんど読めていない場合は画像の向きを変えて再試行
+  const readable = passes.some(p=>p.text.replace(/\s/g, "").length >= 15);
+  if(!readable){
+    for(const deg of [270, 90, 180]){
+      setProgress(`向きを変えて再読み取り中…(${deg}°)`);
+      const rc = resizeCanvas(rotateCanvas(base, deg), OCR_TARGET_LONG);
+      const rg = toGrayContrast(rc);
+      const tt = fixOcrText(await runOcr(rg.canvas));
+      const pp = parseInvoiceText(tt);
+      passes.push({text: tt, parsed: pp, score: scoreParsed(pp, tt)});
+      if(tt.replace(/\s/g, "").length >= 15) break;
     }
   }
 
-  // 内容:件名・品目らしき行
-  const memo = t.match(/(?:件\s*名|品\s*名|摘\s*要|内容)[::\s]*(.+)/);
-  if(memo) out.memo = memo[1].trim().slice(0,60);
+  passes.sort((a,b)=>b.score - a.score);
+  let merged = passes[0].parsed;
+  for(let i=1; i<passes.length; i++) merged = mergeParsed(merged, passes[i].parsed);
+  return {text: passes[0].text, parsed: merged};
+}
+
+// 旧APIの互換用
+async function ocrImage(src){ return (await ocrSmart(src)).text; }
+
+/* ---------- テキスト解析 ---------- */
+
+/* 過去に「御中」で登場した宛先(=自社名)を覚えておき、発行元候補から除外する */
+const RECIP_KEY = "invoiceManagerRecipients_v1";
+let knownRecipients = (()=>{
+  try{ return new Set(JSON.parse(localStorage.getItem(RECIP_KEY)) || []); }
+  catch(e){ return new Set(); }
+})();
+function rememberRecipient(name){
+  const k = normalize(name);
+  if(!k || k.length < 2 || knownRecipients.has(k)) return;
+  knownRecipients.add(k);
+  try{ localStorage.setItem(RECIP_KEY, JSON.stringify([...knownRecipients])); }catch(e){}
+}
+
+const CORP_RE = /(株式会社|合同会社|有限会社|合資会社|一般社団法人|一般財団法人|医療法人|㈱|\(株\)|（株）|Inc\.|Co\.,?\s*Ltd|Corporation|Corp\.|Ltd\.|LLC|LLP|GmbH|K\.K\.)/;
+const CORP_PREFIX_RE = /^(株式会社|合同会社|有限会社|合資会社|一般社団法人|一般財団法人|医療法人|㈱|\(株\)|（株）)$/;
+const VEND_LABEL = /^(発行元|発行者|発行|請求元|請求者|売上者|販売者|振出人|お?支払先|取引先|Issued\s*By|Sold\s*By|Bill\s*From|Seller|Supplier|Vendor|Remit\s*To)\s*[:：]?\s*/i;
+const RECIP_LABEL = /(御中|Bill(?:ed)?\s*To|Sold\s*To|Ship\s*To|Invoice\s*To|Buyer\s*[:：]|Customer\s*[:：])/i;
+const BANKISH = /(銀行|信用金庫|信用組合|信金|農協|ゆうちょ|支店|普通|当座|口座)/;
+
+/* 行から会社名の部分だけを切り出す
+   前置型「株式会社◯◯」/ 後置型「◯◯株式会社」/ 英語「Adobe Systems Inc.」に対応 */
+function extractCorpName(line){
+  const m = line.match(CORP_RE);
+  if(!m) return null;
+  const i = m.index, w = m[0];
+  const SOFT = /[\s　、,，|｜\/／:：･・]/;
+  const HARD = /[:：|｜\/／,，]/;
+  const latin = /^[A-Za-z]/.test(w);
+
+  // 法人格の直後にある語(前置型ならここが社名)
+  let k = i + w.length;
+  while(k < line.length && /[\s　]/.test(line[k])) k++;
+  let ke = k;
+  while(ke < line.length && !SOFT.test(line[ke])) ke++;
+  const after = line.slice(k, ke).trim();
+
+  let name;
+  if(!latin && after){
+    name = line.slice(i, ke).trim();               // 前置型: 株式会社◯◯
+  }else if(latin){
+    // 英語は社名が複数語にまたがるので、直前の強い区切りまで遡る
+    let j = i;
+    while(j > 0 && !HARD.test(line[j-1])) j--;
+    name = line.slice(j, i + w.length).trim();
+  }else{
+    let j = i;
+    while(j > 0 && !SOFT.test(line[j-1])) j--;
+    name = line.slice(j, i + w.length).trim();     // 後置型: ◯◯株式会社
+  }
+  if(!name || name === w) return null;             // 法人格しか無いものは採用しない
+  return name;
+}
+
+/* 社名の前後についた余計な文字を落とす */
+function cleanVendorName(s){
+  let v = String(s || "")
+    .replace(VEND_LABEL, "")
+    .replace(/[《》【】\[\]]/g, "")
+    .split(/(?:〒|TEL|Tel|T E L|電\s*話|FAX|Fax|登録番号|https?:)/)[0]
+    .replace(/\s*(御中|様方|様|行|印)\s*$/, "")
+    .trim();
+  return v.slice(0, 50);
+}
+function parseInvoiceText(text){
+  const t = fixOcrText(text);
+  // 金額・日付は正規化後(lines)、社名・摘要は原文(raws)を使う
+  const normArr = t.split(/\n/).map(l=>l.trim());
+  const rawArr = String(text || "").replace(/\u3000/g, " ").split(/\n/).map(l=>l.trim());
+  const lines = [], raws = [];
+  for(let i=0; i<normArr.length; i++){
+    if(!normArr[i]) continue;
+    lines.push(normArr[i]);
+    raws.push(rawArr[i] !== undefined && rawArr[i] ? rawArr[i] : normArr[i]);
+  }
+  const out = {};
+
+  /* ===== 金額 =====
+     「合計」等のキーワードとの近さでスコアリングし、
+     小計・税抜・消費税・お預り・お釣り等は強くマイナスして誤検出を防ぐ */
+  const NEG = /(小\s*計|税\s*抜|税別|消費\s*税|内\s*税|外\s*税|対象額|お?預り|預\s*り|お?釣|釣\s*銭|差\s*引|前\s*回|繰\s*越|ポイント|値\s*引|割\s*引|手数料)/;
+  const POS_STRONG = /(ご?請求金額|ご?請求額|お?支払い?金額|合計金額|税込合計|総\s*額|合\s*計\s*[(（]\s*税込)/;
+  const POS_WEAK = /(合\s*計|総\s*計|税\s*込|お会計|Total)/i;
+  const numRe = /[¥]?\s*([0-9][0-9,]{2,})\s*円?/g;
+
+  const cands = [];
+  for(let i=0;i<lines.length;i++){
+    const line = lines[i];
+    const strong = POS_STRONG.test(line);
+    const weak = POS_WEAK.test(line);
+    const neg = NEG.test(line);
+    // キーワード行に数字が無い場合は次の行も見る(表組みで金額が下に来るケース)
+    const targets = [line];
+    if((strong || weak) && !/[0-9]/.test(line) && lines[i+1]) targets.push(lines[i+1]);
+    for(const tg of targets){
+      numRe.lastIndex = 0;
+      let m;
+      while((m = numRe.exec(tg))){
+        const digits = m[1].replace(/,/g, "");
+        const v = parseInt(digits, 10);
+        if(!(v > 0 && v < 100000000)) continue;
+        // 通貨記号もカンマも無い7桁以上は電話番号・管理番号の可能性が高い
+        if(digits.length >= 7 && !/[¥円]/.test(m[0]) && !/,/.test(m[1])) continue;
+        let sc = 0;
+        if(strong) sc += 100;
+        else if(weak) sc += 55;
+        if(neg) sc -= 120;
+        if(/¥/.test(m[0])) sc += 12;
+        if(/円/.test(m[0])) sc += 8;
+        if(/,/.test(m[1])) sc += 6;
+        sc += Math.min(10, Math.log10(v) * 2);
+        cands.push({v: v, sc: sc});
+      }
+    }
+  }
+  if(cands.length){
+    cands.sort((a,b)=> (b.sc - a.sc) || (b.v - a.v));
+    if(cands[0].sc > 0){
+      out.amount = cands[0].v;
+    }else{
+      // キーワードが一切拾えなければ、通貨記号付きの最大値にフォールバック
+      const nonNeg = cands.filter(c=>c.sc >= 0);
+      const pool = nonNeg.length ? nonNeg : cands;
+      out.amount = pool.map(c=>c.v).sort((a,b)=>b-a)[0];
+    }
+  }
+
+  /* ===== 日付 =====
+     ・キーワードとの「位置関係」でスコアリング(直前にあるキーワードを最優先)
+     ・支払期限/納期/有効期限などは強くマイナスして請求日と取り違えない
+     ・和暦(元年含む)、2桁年、YYYYMMDD、英語表記に対応
+     ・実在しない日付(2/30 等)は除外、遠い未来は減点、同じ日付の複数出現は加点 */
+  const D_POS_SRC = "(発行日|請求日|取引日|ご?利用日|お?買上げ?日|お?買い上げ日|領収日|作成日|計上日|日\\s*付|年月日|Invoice\\s*Date|Issue\\s*Date|Date)";
+  const D_NEG_SRC = "(支払期[日限]|お?支払い?期[日限]|振込期[日限]|入金期[日限]|納\\s*期|締\\s*切|締\\s*日|有効期限|期\\s*限|Due\\s*Date)";
+  const MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  const TODAY = new Date();
+  const dateHits = [];
+
+  function validDate(y, mo, da){
+    if(y < 2000 || y > 2100 || mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+    const d = new Date(y, mo - 1, da);
+    // 2月30日のような存在しない日付を弾く
+    if(d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da) return null;
+    return d;
+  }
+  function addDate(y, mo, da, score, weak){
+    const d = validDate(y, mo, da);
+    if(!d) return;
+    const days = (d.getTime() - TODAY.getTime()) / 86400000;
+    if(days > 400) score -= 120;        // 遠い未来 = 期限日の可能性が高い
+    else if(days > 45) score -= 55;
+    else if(days < -2920) score -= 25;  // 8年以上前
+    dateHits.push({
+      s: y + "-" + String(mo).padStart(2,"0") + "-" + String(da).padStart(2,"0"),
+      score: score,
+      weak: !!weak
+    });
+  }
+
+  // 日付の直前にあるキーワードで加減点する
+  function keywordAdj(line, at){
+    const negSpans = [];
+    const nre = new RegExp(D_NEG_SRC, "gi");
+    let m;
+    while((m = nre.exec(line))) negSpans.push([m.index, m.index + m[0].length]);
+    const inNeg = i => negSpans.some(sp => i >= sp[0] && i < sp[1]);
+
+    const posIdx = [];
+    const pre = new RegExp(D_POS_SRC, "gi");
+    while((m = pre.exec(line))){ if(!inNeg(m.index)) posIdx.push(m.index); }
+
+    let nearest = -1, kind = 0;
+    for(const i of posIdx){ if(i < at && i > nearest){ nearest = i; kind = 1; } }
+    for(const sp of negSpans){ if(sp[0] < at && sp[0] > nearest){ nearest = sp[0]; kind = -1; } }
+    if(nearest >= 0 && at - nearest <= 24) return kind > 0 ? 55 : -85;
+    if(posIdx.length) return 28;
+    if(negSpans.length) return -45;
+    return 0;
+  }
+
+  function scanDateLine(line, bonus){
+    let m;
+    // 2026年7月31日 / 2026/7/31 / 2026-07-31
+    const r1 = /(\d{4})\s*[年\/\-\.]\s*(\d{1,2})\s*[月\/\-\.]\s*(\d{1,2})/g;
+    while((m = r1.exec(line))) addDate(+m[1], +m[2], +m[3], 30 + bonus + keywordAdj(line, m.index));
+    // 令和6年7月31日 / R6.7.31 / 令和元年…
+    const r2 = /(令\s*和|平\s*成|R|H)\s*(元|\d{1,2})\s*[年\/\-\.]\s*(\d{1,2})\s*[月\/\-\.]\s*(\d{1,2})/gi;
+    while((m = r2.exec(line))){
+      const n = (m[2] === "元") ? 1 : parseInt(m[2], 10);
+      const base = /令|R/i.test(m[1]) ? 2018 : 1988;
+      addDate(base + n, +m[3], +m[4], 28 + bonus + keywordAdj(line, m.index));
+    }
+    // 20260731
+    const r3 = /(?:^|[^\d])(20\d{2})(\d{2})(\d{2})(?!\d)/g;
+    while((m = r3.exec(line))) addDate(+m[1], +m[2], +m[3], 18 + bonus + keywordAdj(line, m.index));
+    // 26/07/31(レシートの2桁年)
+    const r4 = /(?:^|[^\d\/\-\.])(\d{2})\s*[年\/\-\.]\s*(\d{1,2})\s*[月\/\-\.]\s*(\d{1,2})(?!\d)/g;
+    while((m = r4.exec(line))) addDate(2000 + (+m[1]), +m[2], +m[3], 10 + bonus + keywordAdj(line, m.index), true);
+    // Jul 31, 2026
+    const r5 = /([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(20\d{2})/g;
+    while((m = r5.exec(line))){
+      const mo = MONTHS[m[1].slice(0,3).toLowerCase()];
+      if(mo) addDate(+m[3], mo, +m[2], 26 + bonus + keywordAdj(line, m.index));
+    }
+    // 31 Jul 2026
+    const r6 = /(\d{1,2})\s+([A-Za-z]{3,9})\.?,?\s+(20\d{2})/g;
+    while((m = r6.exec(line))){
+      const mo = MONTHS[m[2].slice(0,3).toLowerCase()];
+      if(mo) addDate(+m[3], mo, +m[1], 26 + bonus + keywordAdj(line, m.index));
+    }
+  }
+
+  for(let i=0; i<lines.length; i++){
+    const posBonus = Math.max(0, 10 - i);   // 書類の上部にあるものを優先
+    scanDateLine(lines[i], posBonus);
+    // 「発行日」だけの行 → 次の行の日付をその日付とみなす(表組み対策)
+    if(!/\d/.test(lines[i]) && lines[i+1]){
+      if(new RegExp(D_POS_SRC, "i").test(lines[i])) scanDateLine(lines[i+1], posBonus + 50);
+      else if(new RegExp(D_NEG_SRC, "i").test(lines[i])) scanDateLine(lines[i+1], posBonus - 80);
+    }
+  }
+
+  if(dateHits.length){
+    const agg = new Map();
+    for(const h of dateHits){
+      const cur = agg.get(h.s);
+      if(cur){
+        cur.best = Math.max(cur.best, h.score);
+        cur.n++;
+        if(!h.weak) cur.weak = false;
+      }else{
+        agg.set(h.s, {best: h.score, n: 1, weak: h.weak});
+      }
+    }
+    let bestKey = null, bestScore = -Infinity;
+    let fbKey = null, fbScore = -Infinity;   // 全部マイナス評価だった場合の受け皿
+    agg.forEach((v, k)=>{
+      const sc = v.best + Math.min(18, (v.n - 1) * 6);   // 何度も出てくる日付を優遇
+      if(sc > bestScore){ bestScore = sc; bestKey = k; }
+      if(!v.weak && sc > fbScore){ fbScore = sc; fbKey = k; }
+    });
+    // 支払期限しか書かれていない書類でも空欄にはせず採用する
+    // (バージョン番号などを拾いやすい2桁年パターンだけの場合は採用しない)
+    out.date = (bestScore > 0) ? bestKey : (fbKey || undefined);
+    if(!out.date) delete out.date;
+  }
+
+  /* ===== 請求書番号 ===== */
+  const inv = t.match(/(?:請求書?\s*番号|請求書?\s*No\.?|伝票\s*番号|Invoice\s*(?:No\.?|#)|No\.)\s*[:：\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_\/]{1,29})/i);
+  if(inv) out.invoiceNo = inv[1];
+
+  /* ===== インボイス登録番号(空白・ハイフン入りにも対応) ===== */
+  const flat = t.replace(/[\s\-‐−–—]/g, "");
+  const reg = flat.match(/T\d{13}/);
+  if(reg) out.regNo = reg[0];
+
+  /* ===== 発行元(誰からの請求書か) =====
+     ・「御中」の宛先(=自社)は除外し、過去に見た宛先も記憶して二度と拾わない
+     ・インボイス登録番号(T+13桁)の近くを発行者ブロックとみなして強く加点
+     ・「振込先」以降の銀行名・支店名は除外
+     ・行全体ではなく会社名の部分だけを切り出す */
+  const TITLE = /^(ご?請求書|御請求書|領収書|レシート|納品書|見積書|支払明細書|外注支払明細書|支払通知書|INVOICE|RECEIPT)/i;
+  const LETTER = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uFF66-\uFF9FA-Za-z]/;
+  const NOISE = /(合\s*計|小\s*計|税\s*込|税\s*抜|消費税|電\s*話|TEL|FAX|〒|住\s*所|振\s*込|口\s*座|下記|上記|以下|件\s*名|品\s*名|摘\s*要)/i;
+  function digitHeavy(s){
+    const body = String(s || "").replace(/\s/g, "");
+    if(!body) return true;
+    return body.replace(/[^0-9]/g, "").length / body.length > 0.4;
+  }
+
+  // 目印になる行の位置を先に押さえる
+  let tIdx = -1, furiIdx = -1;
+  for(let i=0; i<raws.length; i++){
+    if(tIdx < 0 && /T\d{13}/.test(raws[i].replace(/[\s\-‐−–—]/g, ""))) tIdx = i;
+    if(furiIdx < 0 && /(振\s*込\s*先|お振込先|振込口座|振替先|お支払口座)/.test(raws[i])) furiIdx = i;
+  }
+
+  // 宛先(自社)の行を特定して記憶する
+  const recipRows = new Set();
+  for(let i=0; i<raws.length; i++){
+    const line = raws[i];
+    const nextIsOnchu = raws[i+1] && /^御\s*中$/.test(raws[i+1].trim());
+    if(RECIP_LABEL.test(line) || nextIsOnchu){
+      recipRows.add(i);
+      if(/御中/.test(line) || nextIsOnchu){
+        const nm = cleanVendorName(extractCorpName(line) || line);
+        if(nm) rememberRecipient(nm);
+      }
+    }
+  }
+  const isKnownRecipient = nm => knownRecipients.has(normalize(nm));
+
+  function vendorScore(i, line, name){
+    let sc = 10 + Math.max(0, 8 - i * 0.5);          // 上部をわずかに優遇
+    if(VEND_LABEL.test(line)) sc += 45;              // 「発行元:」等のラベル付き
+    if(tIdx >= 0 && Math.abs(i - tIdx) <= 4) sc += 45; // 登録番号の近く=発行者ブロック
+    if(furiIdx >= 0 && i > furiIdx && i - furiIdx <= 6) sc -= 70; // 振込先ブロック
+    if(BANKISH.test(line)) sc -= 60;                 // 銀行名・支店名
+    for(let k=i+1; k<=i+3 && k<raws.length; k++){
+      if(/(〒|TEL|Tel|電\s*話|住\s*所)/i.test(raws[k])){ sc += 20; break; }
+    }
+    if(isKnownRecipient(name)) sc -= 200;            // 過去に見た自社名
+    return sc;
+  }
+
+  const vend = [];
+  for(let i=0; i<raws.length; i++){
+    const line = raws[i];
+    if(recipRows.has(i)) continue;                   // 宛先の行は使わない
+    if(TITLE.test(line)) continue;
+    if(/様\s*$/.test(line)) continue;
+    let src_i = i, target = line;
+    // 「発行元」だけの行 → 次の行を社名とみなす
+    if(VEND_LABEL.test(line) && !CORP_RE.test(line) && raws[i+1] && !recipRows.has(i+1)){
+      target = raws[i+1]; src_i = i + 1;
+    }
+    if(!CORP_RE.test(target)) continue;
+    const name = cleanVendorName(extractCorpName(target) || target);
+    if(!name || name.replace(/\s/g, "").length < 3) continue;
+    if(isKnownRecipient(name)) continue;
+    vend.push({name: name, sc: vendorScore(src_i, line, name)});
+  }
+
+  // 法人格が見つからない場合(個人商店・レシート等)のフォールバック
+  if(!vend.length){
+    for(let i=0; i<Math.min(raws.length, 10); i++){
+      const line = raws[i];
+      if(recipRows.has(i)) continue;
+      if(TITLE.test(line) || /様\s*$/.test(line)) continue;
+      if(!LETTER.test(line) || digitHeavy(line)) continue;
+      if(line.replace(/\s/g, "").length < 3) continue;
+      if(NOISE.test(line) || BANKISH.test(line)) continue;
+      const name = cleanVendorName(line);
+      if(!name || isKnownRecipient(name)) continue;
+      const shopish = /(店|商店|事務所|工房|堂|屋|サービス|クリニック|薬局|Shop|Store|Cafe)/i.test(line);
+      let sc = (shopish ? 20 : 5) - i;
+      if(VEND_LABEL.test(line)) sc += 45;
+      if(tIdx >= 0 && Math.abs(i - tIdx) <= 4) sc += 30;
+      vend.push({name: name, sc: sc});
+    }
+  }
+
+  if(vend.length){
+    vend.sort((a,b)=> b.sc - a.sc);
+    out.vendor = vend[0].name;
+  }
+
+  /* ===== 内容・摘要 ===== */
+  const MEMO_RE = /(?:件\s*名|品\s*名|摘\s*要|内\s*容|但し?書?|但)\s*[:：]?\s*(.+)/;
+  for(let i=0; i<raws.length; i++){
+    const m = raws[i].match(MEMO_RE) || lines[i].match(MEMO_RE);
+    if(!m) continue;
+    const v = m[1].replace(/^[\s・:：]+/, "").replace(/(として|上記正に領収).*$/, "").trim();
+    if(v){ out.memo = v.slice(0, 60); break; }
+  }
 
   return out;
 }
@@ -673,6 +1245,8 @@ function render(){
   mSel.innerHTML = '<option value="">すべての月</option>' + months.map(m=>`<option value="${m}">${m.replace("-","年")}月</option>`).join("");
   mSel.value = cur;
 
+  lastFilteredIds = list.map(r=>r.id);
+
   // テーブル
   const tbody = document.getElementById("tbody");
   tbody.innerHTML = list.map(r=>{
@@ -681,7 +1255,9 @@ function render(){
     const stBadge = r.status==="支払済" ? '<span class="badge paid">支払済</span>'
                   : r.status==="未払い" ? '<span class="badge unpaid">未払い</span>'
                   : '<span class="badge checking">確認中</span>';
-    return `<tr class="${r.dup==="exact"?"dup-exact":r.dup==="content"?"dup-content":""}">
+    const selCls = selectedIds.has(r.id) ? " selected" : "";
+    return `<tr data-id="${r.id}" class="${r.dup==="exact"?"dup-exact":r.dup==="content"?"dup-content":""}${selCls}">
+      <td class="chk-col"><input type="checkbox" ${selectedIds.has(r.id)?"checked":""} onchange="toggleRow('${r.id}', this.checked)"></td>
       <td>${r.date||'<span style="color:#4a5070">未設定</span>'}</td>
       <td class="vendor-cell" title="${esc(r.vendor)}">${esc(r.vendor)||'<span style="color:#4a5070">未設定</span>'}</td>
       <td class="memo-cell" title="${esc(r.memo)}">${esc(r.memo)}</td>
@@ -698,6 +1274,7 @@ function render(){
     </tr>`;
   }).join("");
   document.getElementById("empty").style.display = list.length ? "none" : "block";
+  updateSelUI();
 
   // 統計
   const nowM = new Date().toISOString().slice(0,7);
@@ -756,35 +1333,88 @@ function saveModal(){
   }
   save(); closeModal(); render();
 }
-function delRec(id){
-  if(!confirm("この請求書を削除しますか?")) return;
-  records = records.filter(r=>r.id!==id);
-  deletedIds[id] = new Date().toISOString();
-  idbDel(id).catch(()=>{});
-  if(roomRef) roomRef.collection("files").doc(id).delete().catch(()=>{});
-  // 消した相手を参照していた重複マークを再判定
+/* ---------- 選択・一括削除 ---------- */
+let selectedIds = new Set();
+let lastFilteredIds = [];
+
+function toggleRow(id, checked){
+  if(checked) selectedIds.add(id); else selectedIds.delete(id);
+  const tr = document.querySelector(`tr[data-id="${id}"]`);
+  if(tr) tr.classList.toggle("selected", checked);
+  updateSelUI();
+}
+function toggleAll(checked){
+  if(checked) lastFilteredIds.forEach(id=>selectedIds.add(id));
+  else lastFilteredIds.forEach(id=>selectedIds.delete(id));
+  render();
+}
+function clearSelection(){ selectedIds.clear(); render(); }
+
+function updateSelUI(){
+  // すでに消えたIDを掃除
+  selectedIds = new Set([...selectedIds].filter(id=>records.some(r=>r.id===id)));
+  const n = selectedIds.size;
+  const bar = document.getElementById("selBar");
+  bar.classList.toggle("show", n>0);
+  document.getElementById("selCount").textContent = n + "件を選択中";
+  const sum = records.filter(r=>selectedIds.has(r.id)).reduce((s,r)=>s+(r.amount||0),0);
+  document.getElementById("selSum").textContent = "合計 " + fmtY(sum);
+  const all = document.getElementById("chkAll");
+  const shown = lastFilteredIds.length;
+  const selShown = lastFilteredIds.filter(id=>selectedIds.has(id)).length;
+  all.checked = shown>0 && selShown===shown;
+  all.indeterminate = selShown>0 && selShown<shown;
+}
+
+// 削除した相手を参照していた重複マークを再判定
+function recheckDupRefs(removedSet){
   records.forEach(r=>{
-    if(r.dupWith===id){
+    if(r.dupWith && removedSet.has(r.dupWith)){
       r.dup=null; r.dupWith=null;
-      const others = records.filter(x=>x.id!==r.id);
-      const bak = records; records = others;
+      const bak = records;
+      records = bak.filter(x=>x.id!==r.id);
       const d = findDuplicate(r);
       records = bak;
       if(d){ r.dup=d.type; r.dupWith=d.rec.id; }
     }
   });
+}
+
+function purge(ids){
+  const now = new Date().toISOString();
+  ids.forEach(id=>{
+    deletedIds[id] = now;
+    idbDel(id).catch(()=>{});
+    if(roomRef) roomRef.collection("files").doc(id).delete().catch(()=>{});
+  });
+  const set = new Set(ids);
+  records = records.filter(r=>!set.has(r.id));
+  ids.forEach(id=>selectedIds.delete(id));
+  recheckDupRefs(set);
+}
+
+function deleteSelected(){
+  const ids = [...selectedIds];
+  if(!ids.length){ alert("削除する項目が選択されていません。"); return; }
+  const sum = records.filter(r=>selectedIds.has(r.id)).reduce((s,r)=>s+(r.amount||0),0);
+  if(!confirm(`選択した ${ids.length}件（合計 ${fmtY(sum)}）を削除します。\n\nこの操作は取り消せません。よろしいですか?`)) return;
+  purge(ids);
+  save(); render();
+  showAlert("content", `${ids.length}件を削除しました`,
+    "取り消しはできません。戻したい場合は「📂 復元」からバックアップJSONを読み込んでください。");
+}
+
+function delRec(id){
+  if(!confirm("この請求書を削除しますか?")) return;
+  purge([id]);
   save(); render();
 }
 function clearAll(){
   if(!confirm("すべてのデータを削除します。よろしいですか?")) return;
   if(!confirm("本当に削除しますか?(バックアップ推奨)")) return;
-  const now = new Date().toISOString();
-  records.forEach(r=>{
-    deletedIds[r.id] = now;
-    idbDel(r.id).catch(()=>{});
-    if(roomRef) roomRef.collection("files").doc(r.id).delete().catch(()=>{});
-  });
-  records = []; save(); render();
+  purge(records.map(r=>r.id));
+  selectedIds.clear();
+  save(); render();
 }
 
 /* ---------- CSV出力(期間指定) ---------- */
